@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KARANLIK ŞEHİR — İstanbul İmparatorluğu</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --bg-void: #0a0d14;
+    --bg-panel: #12161f;
+    --bg-panel-raised: #181d29;
+    --bg-card: #1d2330;
+    --line: #2a3142;
+    --line-soft: #1f2531;
+    --gold: #c9a24b;
+    --gold-bright: #e6c368;
+    --blood: #a5342e;
+    --blood-bright: #d4453d;
+    --ink: #e8e6df;
+    --ink-dim: #9098a8;
+    --ink-faint: #5c6478;
+    --heat-low: #4a7c59;
+    --heat-mid: #c9a24b;
+    --heat-high: #a5342e;
+    --font-display: 'Bebas Neue', sans-serif;
+    --font-body: 'Oswald', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+
+  html, body{
+    height:100%;
+    background: var(--bg-void);
+    color: var(--ink);
+    font-family: var(--font-body);
+    overflow: hidden;
+  }
+
+  body{
+    background-image:
+      radial-gradient(ellipse at 20% 0%, rgba(201,162,75,0.05), transparent 50%),
+      radial-gradient(ellipse at 80% 100%, rgba(165,52,46,0.06), transparent 50%);
+  }
+
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-track{ background: var(--bg-panel); }
+  ::-webkit-scrollbar-thumb{ background: var(--line); border-radius:4px; }
+  ::-webkit-scrollbar-thumb:hover{ background: var(--ink-faint); }
+
+  button{ font-family: var(--font-body); cursor:pointer; border:none; }
+  button:disabled{ cursor:not-allowed; opacity:0.4; }
+
+  /* ============ LOADING / INTRO ============ */
+  #intro-screen{
+    position:fixed; inset:0; z-index:1000;
+    background: var(--bg-void);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap: 24px;
+    transition: opacity 0.8s ease;
+  }
+  #intro-screen.hidden{ opacity:0; pointer-events:none; }
+  .intro-title{
+    font-family: var(--font-display);
+    font-size: 72px;
+    letter-spacing: 6px;
+    color: var(--gold-bright);
+    text-shadow: 0 0 40px rgba(201,162,75,0.3);
+  }
+  .intro-sub{
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 4px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+  }
+  .intro-btn{
+    margin-top: 20px;
+    padding: 14px 40px;
+    background: transparent;
+    border: 1px solid var(--gold);
+    color: var(--gold-bright);
+    font-family: var(--font-mono);
+    letter-spacing: 3px;
+    font-size: 13px;
+    text-transform: uppercase;
+    transition: all 0.25s ease;
+  }
+  .intro-btn:hover{ background: var(--gold); color: var(--bg-void); }
+
+  /* ============ APP SHELL ============ */
+  #app{
+    height:100vh;
+    display:grid;
+    grid-template-rows: 56px 1fr;
+  }
+
+  /* ---- TOP BAR ---- */
+  #topbar{
+    display:flex; align-items:center;
+    padding: 0 20px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--line);
+    gap: 28px;
+  }
+  #topbar .brand{
+    font-family: var(--font-display);
+    font-size: 22px;
+    letter-spacing: 2px;
+    color: var(--gold-bright);
+    margin-right: auto;
+  }
+  .stat-chip{
+    display:flex; align-items:center; gap:8px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink-dim);
+  }
+  .stat-chip .val{ color: var(--ink); font-weight:600; }
+  .stat-chip.cash .val{ color: var(--gold-bright); }
+  #heat-chip{ display:flex; align-items:center; gap:8px; }
+  #heat-bar-track{
+    width: 90px; height: 8px;
+    background: var(--bg-void);
+    border-radius: 4px;
+    overflow:hidden;
+    border: 1px solid var(--line);
+  }
+  #heat-bar-fill{
+    height:100%; width:0%;
+    background: linear-gradient(90deg, var(--heat-low), var(--heat-mid), var(--heat-high));
+    transition: width 0.5s ease;
+  }
+  #clock-chip{
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink-dim);
+    padding-left: 16px;
+    border-left: 1px solid var(--line);
+  }
+  #clock-chip .val{ color: var(--gold-bright); }
+  #speed-controls{ display:flex; gap:4px; }
+  .speed-btn{
+    width:28px; height:28px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+    font-family: var(--font-mono);
+    font-size:12px;
+    border-radius:4px;
+  }
+  .speed-btn.active{ background: var(--gold); color: var(--bg-void); border-color: var(--gold); }
+
+  /* ---- MAIN LAYOUT: LEFT MAP + RIGHT PANEL ---- */
+  #main{
+    display:grid;
+    grid-template-columns: 1fr 380px;
+    overflow:hidden;
+  }
+
+  #map-wrap{
+    position:relative;
+    overflow:hidden;
+    background: var(--bg-void);
+  }
+  #map-svg{ width:100%; height:100%; display:block; }
+  .water{ fill: #0d1622; }
+  .district-shape{
+    fill: var(--bg-panel-raised);
+    stroke: var(--line);
+    stroke-width: 1;
+    transition: fill 0.3s ease, stroke 0.3s ease;
+    cursor:pointer;
+  }
+  .district-shape:hover{ stroke: var(--gold); stroke-width: 1.5; }
+  .district-shape.owned{ fill: rgba(201,162,75,0.18); stroke: var(--gold); }
+  .district-shape.rival{ fill: rgba(165,52,46,0.14); }
+  .district-shape.selected{ stroke: var(--gold-bright); stroke-width: 2.5; }
+
+  .district-node{ cursor:pointer; }
+  .district-dot{
+    r: 7;
+    fill: var(--bg-panel);
+    stroke: var(--ink-faint);
+    stroke-width: 1.5;
+    transition: all 0.3s ease;
+  }
+  .district-dot.owned{ fill: var(--gold); stroke: var(--gold-bright); }
+  .district-dot.rival{ fill: var(--blood); stroke: var(--blood-bright); }
+  .district-dot.selected{ stroke: var(--ink); stroke-width: 2.5; }
+  .district-pulse{
+    r: 7; fill: none;
+    stroke: var(--blood);
+    stroke-width: 2;
+    opacity: 0;
+  }
+  .district-pulse.active{ animation: pulse-heat 1.8s ease-out infinite; }
+  @keyframes pulse-heat{
+    0%{ r:7; opacity:0.8; }
+    100%{ r:22; opacity:0; }
+  }
+  .district-label{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    fill: var(--ink-dim);
+    letter-spacing: 0.5px;
+    pointer-events: none;
+    text-anchor: middle;
+  }
+  .district-label.owned{ fill: var(--gold-bright); }
+  .map-edge{ stroke: var(--line-soft); stroke-width:1; fill:none; }
+
+  #map-legend{
+    position:absolute; bottom:16px; left:16px;
+    display:flex; gap:16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    background: rgba(10,13,20,0.85);
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--line-soft);
+  }
+  .legend-item{ display:flex; align-items:center; gap:6px; }
+  .legend-dot{ width:9px; height:9px; border-radius:50%; }
+
+  /* ---- RIGHT PANEL ---- */
+  #side-panel{
+    background: var(--bg-panel);
+    border-left: 1px solid var(--line);
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  #tabs{
+    display:flex;
+    border-bottom: 1px solid var(--line);
+    flex-shrink:0;
+  }
+  .tab-btn{
+    flex:1;
+    background: transparent;
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    padding: 12px 4px;
+    border-bottom: 2px solid transparent;
+    text-transform: uppercase;
+  }
+  .tab-btn.active{ color: var(--gold-bright); border-bottom-color: var(--gold); }
+  .tab-btn:hover:not(.active){ color: var(--ink-dim); }
+
+  #panel-content{
+    flex:1;
+    overflow-y:auto;
+    padding: 18px;
+  }
+
+  .panel-title{
+    font-family: var(--font-display);
+    font-size: 26px;
+    letter-spacing: 1px;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .panel-subtitle{
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    margin-bottom: 18px;
+    line-height:1.5;
+  }
+
+  .section-label{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 1.5px;
+    color: var(--gold);
+    text-transform: uppercase;
+    margin: 20px 0 10px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .section-label::after{
+    content:''; flex:1; height:1px; background: var(--line);
+  }
+  .section-label:first-child{ margin-top:0; }
+
+  .card{
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 10px;
+  }
+  .card-row{
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 8px;
+  }
+  .card-row:last-child{ margin-bottom:0; }
+  .card-title{
+    font-family: var(--font-body);
+    font-weight:600;
+    font-size: 14.5px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .card-desc{
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    line-height:1.5;
+    margin-bottom: 10px;
+  }
+  .card-stat{
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-dim);
+  }
+  .card-stat .num{ color: var(--ink); font-weight:600; }
+  .card-stat.gold .num{ color: var(--gold-bright); }
+  .card-stat.blood .num{ color: var(--blood-bright); }
+
+  .btn{
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.5px;
+    padding: 9px 16px;
+    border-radius: 5px;
+    text-transform: uppercase;
+    transition: all 0.2s ease;
+  }
+  .btn-gold{ background: var(--gold); color: var(--bg-void); font-weight:600; }
+  .btn-gold:hover:not(:disabled){ background: var(--gold-bright); }
+  .btn-outline{ background: transparent; border: 1px solid var(--line); color: var(--ink-dim); }
+  .btn-outline:hover:not(:disabled){ border-color: var(--gold); color: var(--gold-bright); }
+  .btn-blood{ background: var(--blood); color: var(--ink); font-weight:600; }
+  .btn-blood:hover:not(:disabled){ background: var(--blood-bright); }
+  .btn-full{ width:100%; }
+  .btn-sm{ padding:6px 10px; font-size:10.5px; }
+
+  .progress-track{
+    width:100%; height:6px;
+    background: var(--bg-void);
+    border-radius:3px;
+    overflow:hidden;
+    margin: 6px 0;
+  }
+  .progress-fill{
+    height:100%;
+    background: var(--gold);
+    transition: width 0.3s ease;
+  }
+
+  .empty-state{
+    text-align:center;
+    padding: 40px 20px;
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height:1.7;
+  }
+
+  select, input[type=number]{
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 7px 10px;
+    border-radius: 5px;
+    width:100%;
+  }
+
+  .role-slot{
+    display:flex; align-items:center; gap:8px;
+    padding: 8px 10px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    margin-bottom:6px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+  .role-slot.filled{ border-color: var(--gold); }
+  .role-slot select{ flex:1; padding:5px 8px; }
+
+  .toast-stack{
+    position:fixed; top:66px; right:16px; z-index:900;
+    display:flex; flex-direction:column; gap:8px;
+    max-width: 320px;
+  }
+  .toast{
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--gold);
+    padding: 12px 14px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height:1.5;
+    animation: toast-in 0.3s ease;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .toast.negative{ border-left-color: var(--blood); }
+  .toast.positive{ border-left-color: var(--heat-low); }
+  @keyframes toast-in{
+    from{ transform: translateX(30px); opacity:0; }
+    to{ transform: translateX(0); opacity:1; }
+  }
+  .toast-title{ font-weight:600; color: var(--ink); margin-bottom:3px; }
+  .toast-body{ color: var(--ink-dim); }
+
+  .badge{
+    display:inline-flex; align-items:center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--bg-panel-raised);
+    color: var(--ink-faint);
+    border: 1px solid var(--line);
+  }
+  .badge.gold{ color: var(--gold-bright); border-color: var(--gold); }
+  .badge.blood{ color: var(--blood-bright); border-color: var(--blood); }
+
+  #district-modal-backdrop{
+    position:fixed; inset:0; z-index:800;
+    background: rgba(5,7,11,0.7);
+    backdrop-filter: blur(2px);
+    display:none;
+    align-items:center; justify-content:center;
+  }
+  #district-modal-backdrop.open{ display:flex; }
+  #district-modal{
+    width: 420px; max-height: 80vh;
+    overflow-y:auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px;
+  }
+
+  .close-x{
+    position:absolute; top:14px; right:14px;
+    background:transparent; color:var(--ink-faint);
+    font-size:20px; line-height:1;
+    width:28px; height:28px;
+  }
+  .close-x:hover{ color: var(--ink); }
+</style>
+</head>
+<body>
+
+<div id="intro-screen">
+  <div class="intro-title">KARANLIK ŞEHİR</div>
+  <div class="intro-sub">İstanbul'un Gölgelerinde Bir İmparatorluk Kur</div>
+  <button class="intro-btn" id="start-btn">Oyuna Başla</button>
+</div>
+
+<div id="app" style="display:none;">
+  <div id="topbar">
+    <div class="brand">KARANLIK ŞEHİR</div>
+    <div class="stat-chip cash">💵 <span class="val" id="stat-cash">₺0</span></div>
+    <div class="stat-chip">🏙️ <span class="val" id="stat-districts">0</span> bölge</div>
+    <div class="stat-chip">👥 <span class="val" id="stat-crew">0</span> adam</div>
+    <div id="heat-chip" class="stat-chip">
+      🔥 <div id="heat-bar-track"><div id="heat-bar-fill"></div></div>
+      <span class="val" id="heat-value">0</span>
+    </div>
+    <div id="clock-chip">Gün <span class="val" id="clock-day">1</span> · <span class="val" id="clock-time">08:00</span></div>
+    <div id="speed-controls">
+      <button class="speed-btn" data-speed="0">⏸</button>
+      <button class="speed-btn active" data-speed="1">▶</button>
+      <button class="speed-btn" data-speed="2">▶▶</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="map-wrap">
+      <svg id="map-svg" viewBox="0 0 100 65" preserveAspectRatio="xMidYMid meet"></svg>
+      <div id="map-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:var(--gold)"></div>Senin bölgen</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--blood)"></div>Rakip çete</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--bg-panel-raised);border:1px solid var(--ink-faint)"></div>Boş bölge</div>
+      </div>
+    </div>
+
+    <div id="side-panel">
+      <div id="tabs">
+        <button class="tab-btn active" data-tab="district">Bölge</button>
+        <button class="tab-btn" data-tab="drugs">Üretim</button>
+        <button class="tab-btn" data-tab="heist">Soygun</button>
+        <button class="tab-btn" data-tab="crew">Ekip</button>
+        <button class="tab-btn" data-tab="empire">İmparatorluk</button>
+      </div>
+      <div id="panel-content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<script src="game-data.js"></script>
+<script src="game-engine.js"></script>
+</body>
+</html>
