@@ -9,8 +9,9 @@
   body{
     margin:0; background:#0a0d14; color:#e8e6df;
     font-family:'Oswald', sans-serif;
-    display:grid; grid-template-columns: 180px 1fr 180px; grid-template-rows: 1fr 140px;
-    height:100vh; gap:8px; padding:8px;
+    display:grid; grid-template-columns: 180px 1fr 180px; grid-template-rows: 1fr auto;
+    height:100vh; height:100dvh; gap:8px; padding:8px;
+    overflow: hidden;
   }
   #cb-left, #cb-right{
     background:#12161f; border:1px solid #2a3142; border-radius:8px;
@@ -19,7 +20,7 @@
   #cb-left{ grid-column:1; }
   #cb-right{ grid-column:3; }
   #cb-map-wrap{ grid-column:2; grid-row:1; background:#05070b; border:1px solid #2a3142; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
-  #cb-bottom{ grid-column:1/4; grid-row:2; background:#12161f; border:1px solid #2a3142; border-radius:8px; padding:10px; display:flex; gap:12px; }
+  #cb-bottom{ grid-column:1/4; grid-row:2; background:#12161f; border:1px solid #2a3142; border-radius:8px; padding:10px; display:flex; gap:12px; max-height: 45vh; overflow-y: auto; }
 
   #cb-grid{ display:grid; }
   .cb-tile{ width:30px; height:30px; box-sizing:border-box; border:1px solid #05070b; position:relative; touch-action: manipulation; }
@@ -89,8 +90,10 @@
   button.secondary{ background:#2a3142; color:#e8e6df; }
   button.mode-active{ background:#4a9c5d; color:#0a0d14; box-shadow: 0 0 0 2px #6bc47f; }
 
-  #cb-log{ flex:1; overflow-y:auto; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#9098a8; }
-  #cb-actions{ width:260px; display:flex; flex-direction:column; gap:6px; }
+  #cb-log{ flex:1; max-height: 42vh; overflow-y:auto; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#9098a8; }
+  #cb-actions{ width:260px; flex-shrink:0; display:flex; flex-direction:column; gap:6px; }
+  #cb-actions > div{ flex-wrap: wrap; }
+  #cb-actions button{ font-size: 10.5px; padding: 5px 8px; }
   #cb-bodyparts{ display:flex; gap:4px; flex-wrap:wrap; }
   #cb-bodyparts button{ flex:1; min-width:60px; }
 
