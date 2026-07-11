@@ -354,26 +354,31 @@ function cbRefreshAll() {
 
 // ---------------- BASİT DÜŞMAN AI ----------------
 function cbRunEnemyAI() {
-  const unit = cbCurrentUnit();
-  if (!unit || unit.side !== "enemy" || unit.status !== "active") { cbRefreshAll(); return; }
+  try {
+    const unit = cbCurrentUnit();
+    if (!unit || unit.side !== "enemy" || unit.status !== "active") { cbRefreshAll(); return; }
 
-  const decision = cbDecideEnemyAction(unit); // combat-engine.js içinde tanımlı, gelişmiş AI mantığı
-  if (decision.type === "fire") {
-    cbDrawLaser(unit, decision.target);
-    cbFire(unit, decision.target, decision.bodyPart);
-  } else if (decision.type === "reload") {
-    cbReload(unit);
-  } else if (decision.type === "cover") {
-    cbTakeCover(unit);
-  } else if (decision.type === "move") {
-    cbMoveUnit(unit, decision.x, decision.y, decision.dir);
+    const decision = cbDecideEnemyAction(unit); // combat-engine.js içinde tanımlı, gelişmiş AI mantığı
+    if (decision.type === "fire") {
+      cbDrawLaser(unit, decision.target);
+      cbFire(unit, decision.target, decision.bodyPart);
+    } else if (decision.type === "reload") {
+      cbReload(unit);
+    } else if (decision.type === "cover") {
+      cbTakeCover(unit);
+    } else if (decision.type === "move") {
+      cbMoveUnit(unit, decision.x, decision.y, decision.dir);
+    }
+    // 'wait' durumunda hiçbir şey yapılmaz, sadece sıra biter
+
+    unit.actionsLeft.move = false;
+    unit.actionsLeft.act = false;
+    cbEndUnitTurn();
+    cbRefreshAll();
+  } catch (err) {
+    console.error("Düşman AI hata:", err);
+    alert("HATA (Düşman AI): " + err.message + "\n" + err.stack);
   }
-  // 'wait' durumunda hiçbir şey yapılmaz, sadece sıra biter
-
-  unit.actionsLeft.move = false;
-  unit.actionsLeft.act = false;
-  cbEndUnitTurn();
-  cbRefreshAll();
 }
 
 // ---------------- BUTON OLAYLARI ----------------
@@ -413,10 +418,17 @@ document.getElementById("cb-btn-end").addEventListener("click", (ev) => {
   const btn = ev.currentTarget;
   if (btn.dataset.processing === "1") return;
   btn.dataset.processing = "1";
-  cbEndUnitTurn();
-  cbMode = null;
-  cbRefreshAll();
-  btn.dataset.processing = "0";
+  try {
+    cbEndUnitTurn();
+    cbMode = null;
+    cbRefreshAll();
+  } catch (err) {
+    console.error("Sırayı Bitir hata:", err);
+    cbLog("HATA: " + err.message);
+    alert("HATA (Sırayı Bitir): " + err.message + "\n" + err.stack);
+  } finally {
+    btn.dataset.processing = "0";
+  }
 });
 
 document.querySelectorAll("#cb-bodyparts button").forEach(btn => {
