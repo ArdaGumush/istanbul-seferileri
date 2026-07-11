@@ -297,7 +297,7 @@
   #map-bg{
     position:absolute; inset:0;
     width:100%; height:100%;
-    object-fit: cover;
+    object-fit: contain;
     object-position: center;
     opacity: 0.9;
   }
@@ -607,11 +607,11 @@
 <div id="app" style="display:none;">
   <div id="topbar">
     <div class="brand" id="topbar-brand">KARANLIK ŞEHİR</div>
-    <div class="stat-chip cash">💵 <span class="val" id="stat-cash">₺0</span></div>
-    <div class="stat-chip">🏙️ <span class="val" id="stat-districts">0</span> bölge</div>
-    <div class="stat-chip">👥 <span class="val" id="stat-crew">0</span> adam</div>
+    <div class="stat-chip cash">NAKİT <span class="val" id="stat-cash">₺0</span></div>
+    <div class="stat-chip">BÖLGE <span class="val" id="stat-districts">0</span></div>
+    <div class="stat-chip">EKİP <span class="val" id="stat-crew">0</span></div>
     <div id="heat-chip" class="stat-chip">
-      🔥 <div id="heat-bar-track"><div id="heat-bar-fill"></div></div>
+      ISI <div id="heat-bar-track"><div id="heat-bar-fill"></div></div>
       <span class="val" id="heat-value">0</span>
     </div>
     <div id="clock-chip">Gün <span class="val" id="clock-day">1</span> · <span class="val" id="clock-time">08:00</span></div>

@@ -87,22 +87,22 @@ const DISTRICTS = [
 // ---- İŞLETME TÜRLERİ (semtlere kurulabilir, pasif gelir üretir) ----
 const BUSINESS_TYPES = [
   {
-    id: "koruma", name: "Koruma Rüşveti", icon: "🛡️",
+    id: "koruma", name: "Koruma Rüşveti", icon: "",
     baseCost: 5000, baseIncomePerHour: 900, heatPerHour: 0.5,
     description: "Yerel esnaftan düzenli haraç toplama ağı.",
   },
   {
-    id: "kumarhane", name: "Yeraltı Kumarhanesi", icon: "🎰",
+    id: "kumarhane", name: "Yeraltı Kumarhanesi", icon: "",
     baseCost: 18000, baseIncomePerHour: 2800, heatPerHour: 1.5,
     description: "Yüksek kazanç, yüksek görünürlük.",
   },
   {
-    id: "gasp", name: "Gasp Şebekesi", icon: "💰",
+    id: "gasp", name: "Gasp Şebekesi", icon: "",
     baseCost: 3000, baseIncomePerHour: 550, heatPerHour: 1.2,
     description: "Sokakta hızlı ve kirli para.",
   },
   {
-    id: "dolandiricilik", name: "Dolandırıcılık Ofisi", icon: "📞",
+    id: "dolandiricilik", name: "Dolandırıcılık Ofisi", icon: "",
     baseCost: 9000, baseIncomePerHour: 1500, heatPerHour: 0.9,
     description: "Sahte yatırım ve sigorta dolandırıcılığı operasyonu.",
   },
@@ -110,9 +110,9 @@ const BUSINESS_TYPES = [
 
 // ---- UYUŞTURUCU ZİNCİRİ: Hammadde -> Nakliye -> Laboratuvar -> Dağıtım ----
 const RAW_MATERIALS = [
-  { id: "kimyasal_a", name: "Kimyasal A", icon: "🧪", baseCost: 40 },
-  { id: "kimyasal_b", name: "Kimyasal B", icon: "⚗️", baseCost: 60 },
-  { id: "bitkisel_ozut", name: "Bitkisel Özüt", icon: "🌿", baseCost: 35 },
+  { id: "kimyasal_a", name: "Zestrayn-9", icon: "", baseCost: 40 },
+  { id: "kimyasal_b", name: "Voltrik Asit", icon: "", baseCost: 60 },
+  { id: "bitkisel_ozut", name: "Karadal Özütü", icon: "", baseCost: 35 },
 ];
 
 const REFINERY_SITE_COST = 16000; // hammadde üretim tesisi kurma maliyeti (semt başına)
@@ -120,22 +120,22 @@ const RAW_MATERIAL_PRODUCTION_PER_HOUR = 24; // tesis başına saatlik üretim
 
 const DRUG_PRODUCTS = [
   {
-    id: "esrar", name: "Esrar", icon: "🌱",
+    id: "esrar", name: "Esrar", icon: "",
     requires: [{ material: "bitkisel_ozut", amount: 2 }],
     yieldPerBatch: 12, streetPrice: 140, riskPerBatch: 1,
   },
   {
-    id: "meth", name: "Meth", icon: "💊",
+    id: "meth", name: "Meth", icon: "",
     requires: [{ material: "kimyasal_a", amount: 2 }, { material: "kimyasal_b", amount: 1 }],
     yieldPerBatch: 10, streetPrice: 220, riskPerBatch: 3,
   },
   {
-    id: "kokain", name: "Kokain", icon: "❄️",
+    id: "kokain", name: "Kokain", icon: "",
     requires: [{ material: "bitkisel_ozut", amount: 3 }, { material: "kimyasal_a", amount: 1 }],
     yieldPerBatch: 8, streetPrice: 380, riskPerBatch: 4,
   },
   {
-    id: "eroin", name: "Eroin", icon: "🩸",
+    id: "eroin", name: "Eroin", icon: "",
     requires: [{ material: "bitkisel_ozut", amount: 2 }, { material: "kimyasal_b", amount: 2 }],
     yieldPerBatch: 6, streetPrice: 450, riskPerBatch: 5,
   },
@@ -157,7 +157,7 @@ const VEHICLES = [
 // ---- SOYGUN HEDEFLERİ ----
 const HEIST_TARGETS = [
   {
-    id: "kuyumcu", name: "Kapalıçarşı Kuyumcusu", icon: "💍", difficulty: 1,
+    id: "kuyumcu", name: "Kapalıçarşı Kuyumcusu", icon: "", difficulty: 1,
     requiredRoles: ["silahsor", "sokak_lideri"],
     equipmentOptions: [
       { id: "maske", name: "Maskeler", cost: 500, successBonus: 5 },
@@ -168,7 +168,7 @@ const HEIST_TARGETS = [
     description: "Küçük ama tıklım tıklım dolu bir kuyumcu. Hızlı iş, orta risk.",
   },
   {
-    id: "banka_subesi", name: "Banka Şubesi", icon: "🏦", difficulty: 2,
+    id: "banka_subesi", name: "Banka Şubesi", icon: "", difficulty: 2,
     requiredRoles: ["silahsor", "muhasebeci", "sokak_lideri"],
     equipmentOptions: [
       { id: "sinyal_kesici", name: "Sinyal Kesici", cost: 4000, successBonus: 12 },
@@ -179,7 +179,7 @@ const HEIST_TARGETS = [
     description: "Orta ölçekli şube. Tam ekip ve doğru zamanlama gerektirir.",
   },
   {
-    id: "nakit_kamyonu", name: "Zırhlı Nakit Kamyonu", icon: "🚚", difficulty: 3,
+    id: "nakit_kamyonu", name: "Zırhlı Nakit Kamyonu", icon: "", difficulty: 3,
     requiredRoles: ["silahsor", "silahsor", "surucu"],
     equipmentOptions: [
       { id: "patlayici", name: "Kapı Patlayıcısı", cost: 7000, successBonus: 18 },
@@ -190,7 +190,7 @@ const HEIST_TARGETS = [
     description: "Hareket halindeki hedef. Zamanlama her şeydir.",
   },
   {
-    id: "ozel_sergi", name: "Özel Koleksiyon Sergisi", icon: "🏛️", difficulty: 4,
+    id: "ozel_sergi", name: "Özel Koleksiyon Sergisi", icon: "", difficulty: 4,
     requiredRoles: ["silahsor", "muhasebeci", "casus", "surucu"],
     equipmentOptions: [
       { id: "sahte_kimlik", name: "Sahte Kimlikler", cost: 5000, successBonus: 14 },
@@ -204,12 +204,12 @@ const HEIST_TARGETS = [
 
 // ---- EKİP ROLLERİ ----
 const CREW_ROLES = {
-  silahsor: { name: "Silahşor", icon: "🔫", baseWage: 300 },
-  muhasebeci: { name: "Muhasebeci", icon: "📊", baseWage: 250 },
-  enforcer: { name: "Enforcer", icon: "👊", baseWage: 280 },
-  casus: { name: "Casus", icon: "🕵️", baseWage: 320 },
-  surucu: { name: "Sürücü", icon: "🚗", baseWage: 240 },
-  sokak_lideri: { name: "Sokak Lideri", icon: "🎯", baseWage: 260 },
+  silahsor: { name: "Silahşor", icon: "", baseWage: 300 },
+  muhasebeci: { name: "Muhasebeci", icon: "", baseWage: 250 },
+  enforcer: { name: "Enforcer", icon: "", baseWage: 280 },
+  casus: { name: "Casus", icon: "", baseWage: 320 },
+  surucu: { name: "Sürücü", icon: "", baseWage: 240 },
+  sokak_lideri: { name: "Sokak Lideri", icon: "", baseWage: 260 },
 };
 
 const FIRST_NAMES = ["Kemal", "Hakan", "Serkan", "Murat", "Emre", "Tolga", "Barış", "Cem", "Deniz", "Onur", "Selim", "Volkan", "Ayşe", "Elif", "Zeynep", "Derya", "Pınar", "Sibel", "Kaan", "Burak"];
@@ -243,25 +243,25 @@ const POLICE_FACTION = {
 // ---- KARŞI-OPERASYON TÜRLERİ (oyuncunun rakiplere karşı yapabileceği) ----
 const COUNTER_OPS = {
   ambush: {
-    name: "Kaçış Aracını Sıkıştır", icon: "🚧",
+    name: "Kaçış Aracını Sıkıştır", icon: "",
     description: "Rakip bir soygundan dönerken yolunu kes. Kazanırsan ganimeti alırsın.",
     requiredRoles: ["silahsor", "surucu"],
     baseSuccess: 45,
   },
   hijack: {
-    name: "Nakliyeyi Soy", icon: "📦",
+    name: "Nakliyeyi Soy", icon: "",
     description: "Rakibin hammadde/ürün taşıyan aracını pusuya düşür, yükü çal.",
     requiredRoles: ["silahsor"],
     baseSuccess: 55,
   },
   hideout_raid: {
-    name: "Hideout Baskını", icon: "🏚️",
+    name: "Hideout Baskını", icon: "",
     description: "Rakibin ana üssüne baskın düzenle. Yüksek risk, yüksek ödül.",
     requiredRoles: ["silahsor", "silahsor", "enforcer", "sokak_lideri"],
     baseSuccess: 25,
   },
   kidnap: {
-    name: "Adam Kaçır / İnfaz Et", icon: "⛓️",
+    name: "Adam Kaçır / İnfaz Et", icon: "",
     description: "Rakibin bir aracını durdurup adamlarını etkisiz hale getir. Çeteyi geçici zayıflatır.",
     requiredRoles: ["silahsor", "enforcer"],
     baseSuccess: 40,
@@ -275,7 +275,7 @@ const RANDOM_EVENTS = [
   { id: "sansli_yuk", name: "Şanslı Sevkiyat", type: "positive", description: "Beklenenden büyük bir yük ele geçirdiniz." },
   { id: "rakip_saldiri", name: "Rakip Çete Saldırısı", type: "negative", description: "Bir rakip çete bölgenize saldırdı." },
   { id: "yeni_baglanti", name: "Yeni Bağlantı", type: "positive", description: "Şehirde yeni bir tedarik bağlantısı buldunuz, maliyetler düştü." },
-  { id: "medya_ilgisi", name: "Medya İlgisi", type: "negative", description: "Faaliyetleriniz basına sızdı, ısı ciddi arttı." },
+  { id: "sakin_hafta", name: "Sakin Bir Hafta", type: "positive", description: "Sokaklar sakin, operasyonlarınız fark edilmeden ilerledi." },
 ];
 
 // ============================================================
@@ -285,57 +285,57 @@ const RANDOM_EVENTS = [
 // ---- SİLAHLAR: 4 tür x 3 segment ----
 const WEAPONS = [
   // TABANCA
-  { id: "tabanca_low", name: "Tabanca (Standart)", type: "tabanca", segment: "low", icon: "🔫",
+  { id: "tabanca_low", name: "Tabanca (Standart)", type: "tabanca", segment: "low", icon: "",
     damage: 12, range: 5, apCost: 1, shots: 1, armorPierce: 0.0,
     aoe: "none", canMoveAndFire: true,
     priceShop: 1200, priceSmuggle: 700 },
-  { id: "tabanca_mid", name: "Tabanca (Uzatmalı Şarjör)", type: "tabanca", segment: "mid", icon: "🔫",
+  { id: "tabanca_mid", name: "Tabanca (Uzatmalı Şarjör)", type: "tabanca", segment: "mid", icon: "",
     damage: 16, range: 6, apCost: 1, shots: 1, armorPierce: 0.1,
     aoe: "none", canMoveAndFire: true,
     priceShop: 2800, priceSmuggle: 1700 },
-  { id: "tabanca_high", name: "Tabanca (Çift Atış)", type: "tabanca", segment: "high", icon: "🔫",
+  { id: "tabanca_high", name: "Tabanca (Çift Atış)", type: "tabanca", segment: "high", icon: "",
     damage: 18, range: 6, apCost: 1, shots: 2, armorPierce: 0.15,
     aoe: "none", canMoveAndFire: true,
     priceShop: 5200, priceSmuggle: 3200 },
 
   // POMPALI
-  { id: "pompali_low", name: "Pompalı (Kesme Namlu)", type: "pompali", segment: "low", icon: "💥",
+  { id: "pompali_low", name: "Pompalı (Kesme Namlu)", type: "pompali", segment: "low", icon: "",
     damage: 26, range: 2, apCost: 2, shots: 1, armorPierce: 0.05,
     aoe: "cone_small", canMoveAndFire: false,
     priceShop: 2200, priceSmuggle: 1300 },
-  { id: "pompali_mid", name: "Pompalı (Çift Namlu)", type: "pompali", segment: "mid", icon: "💥",
+  { id: "pompali_mid", name: "Pompalı (Çift Namlu)", type: "pompali", segment: "mid", icon: "",
     damage: 34, range: 3, apCost: 2, shots: 1, armorPierce: 0.1,
     aoe: "cone_medium", canMoveAndFire: false,
     priceShop: 4600, priceSmuggle: 2900 },
-  { id: "pompali_high", name: "Pompalı (Otomatik)", type: "pompali", segment: "high", icon: "💥",
+  { id: "pompali_high", name: "Pompalı (Otomatik)", type: "pompali", segment: "high", icon: "",
     damage: 42, range: 3, apCost: 2, shots: 2, armorPierce: 0.15,
     aoe: "cone_large", canMoveAndFire: false,
     priceShop: 8400, priceSmuggle: 5300 },
 
   // MAKİNELİ
-  { id: "makineli_low", name: "Makineli (Hafif)", type: "makineli", segment: "low", icon: "🔥",
+  { id: "makineli_low", name: "Makineli (Hafif)", type: "makineli", segment: "low", icon: "",
     damage: 8, range: 6, apCost: 2, shots: 3, armorPierce: 0.05,
     aoe: "line_narrow", canMoveAndFire: false, suppressive: true,
     priceShop: 3500, priceSmuggle: 2100 },
-  { id: "makineli_mid", name: "Makineli (Ağır Şarjör)", type: "makineli", segment: "mid", icon: "🔥",
+  { id: "makineli_mid", name: "Makineli (Ağır Şarjör)", type: "makineli", segment: "mid", icon: "",
     damage: 10, range: 7, apCost: 2, shots: 4, armorPierce: 0.1,
     aoe: "line_medium", canMoveAndFire: false, suppressive: true,
     priceShop: 6800, priceSmuggle: 4200 },
-  { id: "makineli_high", name: "Makineli (Tam Otomatik)", type: "makineli", segment: "high", icon: "🔥",
+  { id: "makineli_high", name: "Makineli (Tam Otomatik)", type: "makineli", segment: "high", icon: "",
     damage: 12, range: 8, apCost: 2, shots: 5, armorPierce: 0.15,
     aoe: "line_wide", canMoveAndFire: false, suppressive: true,
     priceShop: 11500, priceSmuggle: 7200 },
 
   // TÜFEK (Sniper)
-  { id: "tufek_low", name: "Tüfek (Av Tüfeği Modifiyeli)", type: "tufek", segment: "low", icon: "🎯",
+  { id: "tufek_low", name: "Tüfek (Av Tüfeği Modifiyeli)", type: "tufek", segment: "low", icon: "",
     damage: 30, range: 9, apCost: 2, shots: 1, armorPierce: 0.2,
     aoe: "none", canMoveAndFire: false, requiresStationary: true,
     priceShop: 4200, priceSmuggle: 2600 },
-  { id: "tufek_mid", name: "Tüfek (Yarı Otomatik)", type: "tufek", segment: "mid", icon: "🎯",
+  { id: "tufek_mid", name: "Tüfek (Yarı Otomatik)", type: "tufek", segment: "mid", icon: "",
     damage: 40, range: 11, apCost: 2, shots: 1, armorPierce: 0.35,
     aoe: "none", canMoveAndFire: false, requiresStationary: true,
     priceShop: 8800, priceSmuggle: 5500 },
-  { id: "tufek_high", name: "Tüfek (Keskin Nişancı)", type: "tufek", segment: "high", icon: "🎯",
+  { id: "tufek_high", name: "Tüfek (Keskin Nişancı)", type: "tufek", segment: "high", icon: "",
     damage: 55, range: 14, apCost: 2, shots: 1, armorPierce: 0.6,
     aoe: "none", canMoveAndFire: false, requiresStationary: true,
     priceShop: 15000, priceSmuggle: 9500 },
@@ -343,13 +343,13 @@ const WEAPONS = [
 
 // ---- ZIRHLAR ----
 const ARMORS = [
-  { id: "yelek_hafif", name: "Hafif Yelek", icon: "🦺",
+  { id: "yelek_hafif", name: "Hafif Yelek", icon: "",
     damageReduction: 0.15, durability: 2, apPenalty: 0,
     priceShop: 1800, priceSmuggle: 1100 },
-  { id: "yelek_orta", name: "Orta Zırh", icon: "🦺",
+  { id: "yelek_orta", name: "Orta Zırh", icon: "",
     damageReduction: 0.30, durability: 4, apPenalty: 1,
     priceShop: 4200, priceSmuggle: 2700 },
-  { id: "yelek_agir", name: "Ağır Zırh (Çelik Plaka)", icon: "🛡️",
+  { id: "yelek_agir", name: "Ağır Zırh (Çelik Plaka)", icon: "",
     damageReduction: 0.50, durability: 7, apPenalty: 2,
     priceShop: 9000, priceSmuggle: 5800 },
 ];
@@ -357,25 +357,25 @@ const ARMORS = [
 // ---- SARF MALZEMELERİ (Consumables) ----
 const CONSUMABLES = [
   {
-    id: "molotof", name: "Molotof", icon: "🔥",
+    id: "molotof", name: "Molotof", icon: "",
     description: "Küçük alana atılır, birkaç tur boyunca o kareyi yakmaya devam eder.",
     aoeRadius: 1, damage: 14, burnTurns: 3, stunTurns: 0,
     coverPierce: 0, priceShop: 600, priceSmuggle: 350,
   },
   {
-    id: "el_bombasi", name: "El Bombası", icon: "💣",
+    id: "el_bombasi", name: "El Bombası", icon: "",
     description: "Orta alana anlık yüksek hasar verir, siperi kısmen deler.",
     aoeRadius: 2, damage: 35, burnTurns: 0, stunTurns: 0,
     coverPierce: 0.4, priceShop: 900, priceSmuggle: 550,
   },
   {
-    id: "sersemletici", name: "Sersemletici (Flashbang)", icon: "✨",
+    id: "sersemletici", name: "Sersemletici (Flashbang)", icon: "",
     description: "Hasar vermez, alandaki düşmanları 1 tur sersemletir (ateş edemez).",
     aoeRadius: 2, damage: 0, burnTurns: 0, stunTurns: 1,
     coverPierce: 0, priceShop: 500, priceSmuggle: 300,
   },
   {
-    id: "kirilma_sarji", name: "Kırılma Şarjı", icon: "🧨",
+    id: "kirilma_sarji", name: "Kırılma Şarjı", icon: "",
     description: "Duvarı/kapıyı yıkar, yeni bir geçiş açar. Sabit haritalarda alternatif giriş sağlar.",
     aoeRadius: 1, damage: 20, burnTurns: 0, stunTurns: 0,
     coverPierce: 1.0, breachesWalls: true, priceShop: 1400, priceSmuggle: 900,
@@ -400,7 +400,7 @@ const GAME_CONSTANTS = {
   raidHeatThreshold: 80,
   tickIntervalMs: 3000,
   minutesPerTick: 5,
-  randomEventChancePerTick: 0.04,
+  randomEventChancePerTick: 0.012,
 };
 
 // ---- KÖKEN HİKAYELERİ (karakter kuruluşu) ----
@@ -459,29 +459,41 @@ const IDEOLOGIES = [
     id: "aile_sadakati", name: "Aile Sadakati",
     description: "Örgüt bir ailedir. Kimse geride bırakılmaz, kimse satılmaz.",
     buff: "Ekip maaş maliyeti -%15",
-    drawback: null,
-    apply: (s) => { s.modifiers.wageMult = (s.modifiers.wageMult || 1) * 0.85; },
+    drawback: "Bölge ele geçirme maliyeti +%10",
+    apply: (s) => {
+      s.modifiers.wageMult = (s.modifiers.wageMult || 1) * 0.85;
+      s.modifiers.districtCostMult = (s.modifiers.districtCostMult || 1) * 1.1;
+    },
   },
   {
     id: "kar_maksimizasyonu", name: "Kar Maksimizasyonu",
     description: "Duygular işi batırır. Tek gerçek sadakat kardır.",
     buff: "Tüm pasif işletme geliri +%20",
-    drawback: null,
-    apply: (s) => { s.modifiers.businessIncomeMult = (s.modifiers.businessIncomeMult || 1) * 1.2; },
+    drawback: "Ekip sadakati zamanla daha hızlı düşer",
+    apply: (s) => {
+      s.modifiers.businessIncomeMult = (s.modifiers.businessIncomeMult || 1) * 1.2;
+      s.modifiers.loyaltyDecayMult = (s.modifiers.loyaltyDecayMult || 1) * 1.3;
+    },
   },
   {
     id: "sokak_adaleti", name: "Sokak Adaleti",
     description: "Mahalle seni korur çünkü sen mahalleyi koruyorsun. Halk polise konuşmaz.",
     buff: "Isı birikimi -%20",
-    drawback: null,
-    apply: (s) => { s.modifiers.heatGainMult = (s.modifiers.heatGainMult || 1) * 0.8; },
+    drawback: "Tüm pasif işletme geliri -%10",
+    apply: (s) => {
+      s.modifiers.heatGainMult = (s.modifiers.heatGainMult || 1) * 0.8;
+      s.modifiers.businessIncomeMult = (s.modifiers.businessIncomeMult || 1) * 0.9;
+    },
   },
   {
     id: "golge_diplomasisi", name: "Gölge Diplomasisi",
     description: "Her çatışma bir başarısızlıktır. Masada çözülen sorun sokakta kan dökmez.",
     buff: "Rakip çete düşmanlığı %30 daha yavaş artar",
-    drawback: null,
-    apply: (s) => { s.modifiers.hostilityGainMult = (s.modifiers.hostilityGainMult || 1) * 0.7; },
+    drawback: "Saldırı/savunma başarı şansı -%10",
+    apply: (s) => {
+      s.modifiers.hostilityGainMult = (s.modifiers.hostilityGainMult || 1) * 0.7;
+      s.modifiers.attackSuccessBonus = (s.modifiers.attackSuccessBonus || 0) - 10;
+    },
   },
   {
     id: "komunist", name: "Komünist",

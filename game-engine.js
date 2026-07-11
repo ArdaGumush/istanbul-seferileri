@@ -96,9 +96,12 @@ function toast(title, body, type = "neutral") {
   const stack = document.getElementById("toast-stack");
   const el = document.createElement("div");
   el.className = "toast" + (type !== "neutral" ? " " + type : "");
+  el.style.cursor = "pointer";
   el.innerHTML = `<div class="toast-title">${title}</div><div class="toast-body">${body}</div>`;
+  const dismiss = () => { el.style.opacity = "0"; el.style.transition = "opacity 0.3s"; setTimeout(() => el.remove(), 300); };
+  el.addEventListener("click", dismiss);
   stack.appendChild(el);
-  setTimeout(() => { el.style.opacity = "0"; el.style.transition = "opacity 0.5s"; setTimeout(() => el.remove(), 500); }, 5000);
+  setTimeout(dismiss, 5000);
 }
 function randomName() {
   const f = FIRST_NAMES[Math.floor(Math.random() * FIRST_NAMES.length)];
@@ -233,22 +236,29 @@ function renderMap() {
 
     const statusClass = districtStatusClass(d.id);
     const dObj = state.districts[d.id];
+    const rivalGang = dObj.owner && dObj.owner.startsWith("rival:") ? RIVAL_GANGS.find(g => "rival:" + g.id === dObj.owner) : null;
 
     if (statusClass === "rival") {
       const pulse = document.createElementNS(ns, "circle");
       pulse.setAttribute("cx", d.x); pulse.setAttribute("cy", d.y);
       pulse.setAttribute("class", "district-pulse active");
+      if (rivalGang) pulse.setAttribute("stroke", rivalGang.color);
       g.appendChild(pulse);
     }
 
     const dot = document.createElementNS(ns, "circle");
     dot.setAttribute("cx", d.x); dot.setAttribute("cy", d.y);
     dot.setAttribute("class", "district-dot " + statusClass + (state.selectedDistrict === d.id ? " selected" : ""));
+    if (rivalGang) {
+      dot.setAttribute("fill", rivalGang.color);
+      dot.setAttribute("stroke", rivalGang.color);
+    }
     g.appendChild(dot);
 
     const label = document.createElementNS(ns, "text");
     label.setAttribute("x", d.x); label.setAttribute("y", d.y - 3.6);
     label.setAttribute("class", "district-label " + (statusClass === "owned" ? "owned" : ""));
+    if (rivalGang) label.setAttribute("fill", rivalGang.color);
     label.textContent = d.name;
     g.appendChild(label);
 
@@ -287,17 +297,18 @@ function renderMap() {
     svg.appendChild(vg);
   });
 
-  // Hideout ikonları (rakip çeteler + polis)
+  // Hideout işaretleri (rakip çeteler + polis) - küçük kare simge
   RIVAL_GANGS.forEach(gang => {
     if (rivalDistrictIds(gang.id).length === 0) return;
     const d = districtById(gang.hideoutDistrict);
     if (!d) return;
-    const t = document.createElementNS(ns, "text");
-    t.setAttribute("x", d.x); t.setAttribute("y", d.y + 5.5);
-    t.setAttribute("text-anchor", "middle");
-    t.setAttribute("font-size", "2.6");
-    t.textContent = "🏚";
-    svg.appendChild(t);
+    const rect = document.createElementNS(ns, "rect");
+    rect.setAttribute("x", d.x - 1.1); rect.setAttribute("y", d.y + 3.2);
+    rect.setAttribute("width", "2.2"); rect.setAttribute("height", "2.2");
+    rect.setAttribute("fill", "none");
+    rect.setAttribute("stroke", gang.color);
+    rect.setAttribute("stroke-width", "0.35");
+    svg.appendChild(rect);
   });
 }
 
@@ -329,7 +340,7 @@ function openVehicleModal(vehicleId) {
   if (v.faction === "polis") {
     modal.innerHTML = `
       <button class="close-x" id="close-vehicle-modal">×</button>
-      <div class="panel-title">🚓 Polis Devriyesi</div>
+      <div class="panel-title">Polis Devriyesi</div>
       <div class="panel-subtitle">${districtById(v.fromId).name} → ${districtById(v.toId).name} rotasında devriye geziyor. Bu araca müdahale edemezsin.</div>
     `;
     document.getElementById("close-vehicle-modal").addEventListener("click", closeModal);
@@ -354,7 +365,7 @@ function openVehicleModal(vehicleId) {
   relevantOps.forEach(op => {
     html += `
       <div class="card">
-        <div class="card-title">${op.icon} ${op.name}</div>
+        <div class="card-title">${op.name}</div>
         <div class="card-desc">${op.description}</div>
         <button class="btn btn-blood btn-sm btn-full" data-launch-op="${op.name}" data-op-key="${Object.keys(COUNTER_OPS).find(k=>COUNTER_OPS[k]===op)}">Ekip Ata ve Başlat</button>
       </div>
@@ -382,7 +393,7 @@ function openCounterOpPlanner(vehicleId, opKey) {
 
   let html = `
     <button class="close-x" id="close-op-modal">×</button>
-    <div class="panel-title">${op.icon} ${op.name}</div>
+    <div class="panel-title">${op.name}</div>
     <div class="panel-subtitle">${op.description}</div>
     <div class="section-label">Ekip Ata</div>
     <div id="op-role-slots"></div>
@@ -402,7 +413,7 @@ function openCounterOpPlanner(vehicleId, opKey) {
       const available = state.crew.filter(c => c.role === roleId && !c.assignedTo);
       const div = document.createElement("div");
       div.className = "role-slot";
-      div.innerHTML = `${role.icon} ${role.name}
+      div.innerHTML = `${role.name}
         <select data-slot="${slotIndex}" data-role="${roleId}">
           <option value="">— Boş —</option>
           ${available.map(c => `<option value="${c.id}">${c.name} (Sadakat ${Math.round(c.loyalty)})</option>`).join("")}
@@ -550,8 +561,8 @@ function renderDistrictTab() {
     <div class="panel-title">${d.name}</div>
     <div class="panel-subtitle">${d.description}</div>
     <div style="display:flex; gap:6px; margin-bottom:16px;">
-      <span class="badge">Zenginlik ${"★".repeat(d.wealth)}</span>
-      <span class="badge">Isı Direnci ${"★".repeat(d.heatResistance)}</span>
+      <span class="badge">Zenginlik ${d.wealth}/5</span>
+      <span class="badge">Isı Direnci ${d.heatResistance}/5</span>
       ${isPlayer ? '<span class="badge gold">Senin Bölgen</span>' : ''}
       ${rivalGang ? `<span class="badge blood">${rivalGang.name}</span>` : ''}
     </div>
@@ -580,6 +591,46 @@ function renderDistrictTab() {
       </div>
     `;
   } else if (isPlayer) {
+    html += `<div class="section-label">Laboratuvar</div>`;
+    if (dObj.lab) {
+      const lvl = LAB_LEVELS.find(l => l.level === dObj.lab.level);
+      const next = LAB_LEVELS.find(l => l.level === dObj.lab.level + 1);
+      html += `
+        <div class="card">
+          <div class="card-title">Laboratuvar — Seviye ${lvl.level}</div>
+          <div class="card-desc">Parti süresi: ${lvl.batchTimeMin} dk · Kapasite: ${lvl.capacity} parti/döngü</div>
+          ${next ? `<div class="card-row"><span class="card-stat gold">Yükselt: <span class="num">${fmt(next.cost)}</span></span><button class="btn btn-outline btn-sm" id="upgrade-lab" ${state.cash < next.cost ? "disabled" : ""}>Seviye ${next.level}</button></div>` : `<div class="card-stat">Maksimum seviye.</div>`}
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="card">
+          <div class="card-title">Laboratuvar Kur</div>
+          <div class="card-desc">Hammaddeyi işlenmiş ürüne çevirir. Üretim sekmesinden yönetilir.</div>
+          <div class="card-row">
+            <span class="card-stat gold">Maliyet: <span class="num">${fmt(LAB_LEVELS[0].cost)}</span></span>
+            <button class="btn btn-gold btn-sm" id="build-lab" ${state.cash < LAB_LEVELS[0].cost ? "disabled" : ""}>Kur</button>
+          </div>
+        </div>
+      `;
+    }
+
+    html += `<div class="section-label">Hammadde Üretim Tesisi</div>`;
+    if (dObj.refinery) {
+      html += `<div class="card"><div class="card-title">Üretim Tesisi Aktif</div><div class="card-desc">Saatte ${RAW_MATERIAL_PRODUCTION_PER_HOUR} birim rastgele hammadde üretiyor. Nakliye ile laboratuvara taşınmalı.</div></div>`;
+    } else {
+      html += `
+        <div class="card">
+          <div class="card-title">Tesis Kur</div>
+          <div class="card-desc">Bu semtte hammadde üretimi başlat. Üretilen malzeme laboratuvara nakledilmelidir.</div>
+          <div class="card-row">
+            <span class="card-stat gold">Maliyet: <span class="num">${fmt(REFINERY_SITE_COST)}</span></span>
+            <button class="btn btn-gold btn-sm" id="build-refinery" ${state.cash < REFINERY_SITE_COST ? "disabled" : ""}>Kur</button>
+          </div>
+        </div>
+      `;
+    }
+
     html += `<div class="section-label">İşletmeler</div>`;
     if (dObj.businesses.length === 0) {
       html += `<div class="empty-state">Bu bölgede henüz işletmen yok.</div>`;
@@ -588,7 +639,7 @@ function renderDistrictTab() {
         const type = BUSINESS_TYPES.find(t => t.id === b.typeId);
         html += `
           <div class="card">
-            <div class="card-title">${type.icon} ${type.name}</div>
+            <div class="card-title">${type.name}</div>
             <div class="card-stat gold">Saatlik Gelir: <span class="num">${fmt(type.baseIncomePerHour)}</span></div>
             <div class="card-stat blood">Isı: <span class="num">+${type.heatPerHour}/sa</span></div>
           </div>
@@ -599,7 +650,7 @@ function renderDistrictTab() {
     BUSINESS_TYPES.filter(t => !dObj.businesses.some(b => b.typeId === t.id)).forEach(t => {
       html += `
         <div class="card">
-          <div class="card-title">${t.icon} ${t.name}</div>
+          <div class="card-title">${t.name}</div>
           <div class="card-desc">${t.description}</div>
           <div class="card-row">
             <span class="card-stat gold">Maliyet: <span class="num">${fmt(t.baseCost)}</span></span>
@@ -608,46 +659,6 @@ function renderDistrictTab() {
         </div>
       `;
     });
-
-    html += `<div class="section-label">Hammadde Üretim Tesisi</div>`;
-    if (dObj.refinery) {
-      html += `<div class="card"><div class="card-title">🏭 Üretim Tesisi Aktif</div><div class="card-desc">Saatte ${RAW_MATERIAL_PRODUCTION_PER_HOUR} birim rastgele hammadde üretiyor. Nakliye ile laboratuvara taşınmalı.</div></div>`;
-    } else {
-      html += `
-        <div class="card">
-          <div class="card-title">🏭 Tesis Kur</div>
-          <div class="card-desc">Bu semtte hammadde üretimi başlat. Üretilen malzeme laboratuvara nakledilmelidir.</div>
-          <div class="card-row">
-            <span class="card-stat gold">Maliyet: <span class="num">${fmt(REFINERY_SITE_COST)}</span></span>
-            <button class="btn btn-gold btn-sm" id="build-refinery" ${state.cash < REFINERY_SITE_COST ? "disabled" : ""}>Kur</button>
-          </div>
-        </div>
-      `;
-    }
-
-    html += `<div class="section-label">Laboratuvar</div>`;
-    if (dObj.lab) {
-      const lvl = LAB_LEVELS.find(l => l.level === dObj.lab.level);
-      const next = LAB_LEVELS.find(l => l.level === dObj.lab.level + 1);
-      html += `
-        <div class="card">
-          <div class="card-title">⚗️ Laboratuvar — Seviye ${lvl.level}</div>
-          <div class="card-desc">Parti süresi: ${lvl.batchTimeMin} dk · Kapasite: ${lvl.capacity} parti/döngü</div>
-          ${next ? `<div class="card-row"><span class="card-stat gold">Yükselt: <span class="num">${fmt(next.cost)}</span></span><button class="btn btn-outline btn-sm" id="upgrade-lab" ${state.cash < next.cost ? "disabled" : ""}>Seviye ${next.level}</button></div>` : `<div class="card-stat">Maksimum seviye.</div>`}
-        </div>
-      `;
-    } else {
-      html += `
-        <div class="card">
-          <div class="card-title">⚗️ Laboratuvar Kur</div>
-          <div class="card-desc">Hammaddeyi işlenmiş ürüne çevirir. Üretim sekmesinden yönetilir.</div>
-          <div class="card-row">
-            <span class="card-stat gold">Maliyet: <span class="num">${fmt(LAB_LEVELS[0].cost)}</span></span>
-            <button class="btn btn-gold btn-sm" id="build-lab" ${state.cash < LAB_LEVELS[0].cost ? "disabled" : ""}>Kur</button>
-          </div>
-        </div>
-      `;
-    }
   }
 
   el.innerHTML = html;
@@ -774,10 +785,10 @@ function renderDrugsTab() {
 
     <div class="section-label">Depo</div>
     <div class="card">
-      ${RAW_MATERIALS.map(m => `<div class="card-row"><span class="card-stat">${m.icon} ${m.name}</span><span class="card-stat"><span class="num">${state.materialStock[m.id]}</span> birim</span></div>`).join("")}
+      ${RAW_MATERIALS.map(m => `<div class="card-row"><span class="card-stat">${m.name}</span><span class="card-stat"><span class="num">${state.materialStock[m.id]}</span> birim</span></div>`).join("")}
     </div>
     <div class="card">
-      ${DRUG_PRODUCTS.map(p => `<div class="card-row"><span class="card-stat">${p.icon} ${p.name}</span><span class="card-stat gold"><span class="num">${state.drugStock[p.id]}</span> birim</span></div>`).join("")}
+      ${DRUG_PRODUCTS.map(p => `<div class="card-row"><span class="card-stat">${p.name}</span><span class="card-stat gold"><span class="num">${state.drugStock[p.id]}</span> birim</span></div>`).join("")}
     </div>
 
     <div class="section-label">Nakliye — Yeni Sevkiyat</div>
@@ -806,7 +817,7 @@ function renderDrugsTab() {
   }
 
   html += `<div class="section-label">Yoldaki Sevkiyatlar</div>`;
-  const activeShipments = state.vehicles.filter(v => v.status === "transit");
+  const activeShipments = state.vehicles.filter(v => v.status === "transit" && v.faction === "player" && v.kind === "shipment");
   if (activeShipments.length === 0) {
     html += `<div class="empty-state">Şu an yolda sevkiyat yok.</div>`;
   } else {
@@ -814,9 +825,10 @@ function renderDrugsTab() {
       const remaining = Math.max(0, v.arrivesAtMin - state.minutes);
       const totalTime = v.totalTravelMin || 1;
       const pct = Math.min(100, 100 - (remaining / totalTime) * 100);
+      const vehicleDef = VEHICLES.find(x => x.id === v.type);
       html += `
         <div class="card">
-          <div class="card-title">🚚 ${VEHICLES.find(x => x.id === v.type).name}</div>
+          <div class="card-title">${vehicleDef ? vehicleDef.name : "Nakliye"}</div>
           <div class="card-desc">${districtById(v.fromId).name} → ${districtById(v.toId).name}</div>
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
           <div class="card-stat">Kalan: <span class="num">${remaining} dk</span></div>
@@ -832,7 +844,7 @@ function renderDrugsTab() {
     labDistricts.forEach(id => {
       const lab = state.districts[id].lab;
       const activeBatch = lab.activeBatch;
-      html += `<div class="card"><div class="card-title">⚗️ ${districtById(id).name} — Seviye ${lab.level}</div>`;
+      html += `<div class="card"><div class="card-title">${districtById(id).name} — Seviye ${lab.level}</div>`;
       if (activeBatch) {
         const remaining = Math.max(0, activeBatch.finishesAtMin - state.minutes);
         const pct = Math.min(100, 100 - (remaining / activeBatch.totalMin) * 100);
@@ -845,7 +857,7 @@ function renderDrugsTab() {
         html += `
           <div style="margin-bottom:8px;">
             <select id="produce-select-${id}">
-              ${DRUG_PRODUCTS.map(p => `<option value="${p.id}">${p.icon} ${p.name} (${p.requires.map(r => RAW_MATERIALS.find(m => m.id === r.material).name + " x" + r.amount).join(", ")})</option>`).join("")}
+              ${DRUG_PRODUCTS.map(p => `<option value="${p.id}">${p.name} (${p.requires.map(r => RAW_MATERIALS.find(m => m.id === r.material).name + " x" + r.amount).join(", ")})</option>`).join("")}
             </select>
           </div>
           <button class="btn btn-gold btn-sm btn-full" data-produce="${id}">Üretimi Başlat</button>
@@ -860,7 +872,7 @@ function renderDrugsTab() {
   DRUG_PRODUCTS.forEach(p => {
     html += `
       <div class="card-row">
-        <span class="card-stat">${p.icon} ${p.name} × <span class="num">${state.drugStock[p.id]}</span></span>
+        <span class="card-stat">${p.name} × <span class="num">${state.drugStock[p.id]}</span></span>
         <button class="btn btn-outline btn-sm" data-sell="${p.id}" ${state.drugStock[p.id] === 0 ? "disabled" : ""}>Sat (${fmt(p.streetPrice)}/birim)</button>
       </div>
     `;
@@ -960,7 +972,7 @@ function renderHeistTab() {
       const pct = Math.min(100, 100 - (remaining / h.totalPrepMin) * 100);
       html += `
         <div class="card">
-          <div class="card-title">${target.icon} ${target.name}</div>
+          <div class="card-title">${target.name}</div>
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
           <div class="card-stat">Kalan: <span class="num">${remaining} dk</span> · Başarı İhtimali: <span class="num">%${h.successChance}</span></div>
         </div>
@@ -972,7 +984,7 @@ function renderHeistTab() {
   HEIST_TARGETS.forEach(t => {
     html += `
       <div class="card">
-        <div class="card-title">${t.icon} ${t.name}</div>
+        <div class="card-title">${t.name}</div>
         <div class="card-desc">${t.description}</div>
         <div class="card-stat gold">Ödül: <span class="num">${fmt(t.payout[0])} - ${fmt(t.payout[1])}</span></div>
         <button class="btn btn-outline btn-sm btn-full" style="margin-top:8px;" data-plan="${t.id}">Planla</button>
@@ -994,7 +1006,7 @@ function openHeistPlanner(targetId) {
 
   let html = `
     <button class="close-x" id="close-heist-modal">×</button>
-    <div class="panel-title">${target.icon} ${target.name}</div>
+    <div class="panel-title">${target.name}</div>
     <div class="panel-subtitle">${target.description}</div>
     <div class="section-label">Ekip Ata</div>
     <div id="heist-role-slots"></div>
@@ -1022,7 +1034,7 @@ function openHeistPlanner(targetId) {
       const available = state.crew.filter(c => c.role === roleId && !c.assignedTo);
       const div = document.createElement("div");
       div.className = "role-slot";
-      div.innerHTML = `${role.icon} ${role.name}
+      div.innerHTML = `${role.name}
         <select data-slot="${slotIndex}" data-role="${roleId}">
           <option value="">— Boş —</option>
           ${available.map(c => `<option value="${c.id}">${c.name} (Sadakat ${c.loyalty})</option>`).join("")}
@@ -1117,18 +1129,18 @@ function renderArmoryTab() {
   if (ownedWeapons.length === 0 && ownedArmors.length === 0 && ownedConsumables.length === 0) {
     html += `<div class="card-desc" style="margin-bottom:0;">Henüz hiç silah/zırh/malzemen yok.</div>`;
   } else {
-    ownedWeapons.forEach(w => { html += `<div class="card-row"><span class="card-stat">${w.icon} ${w.name}</span><span class="card-stat gold"><span class="num">${state.armory.weapons[w.id]}</span> adet</span></div>`; });
-    ownedArmors.forEach(a => { html += `<div class="card-row"><span class="card-stat">${a.icon} ${a.name}</span><span class="card-stat gold"><span class="num">${state.armory.armors[a.id]}</span> adet</span></div>`; });
-    ownedConsumables.forEach(c => { html += `<div class="card-row"><span class="card-stat">${c.icon} ${c.name}</span><span class="card-stat gold"><span class="num">${state.armory.consumables[c.id]}</span> adet</span></div>`; });
+    ownedWeapons.forEach(w => { html += `<div class="card-row"><span class="card-stat">${w.name}</span><span class="card-stat gold"><span class="num">${state.armory.weapons[w.id]}</span> adet</span></div>`; });
+    ownedArmors.forEach(a => { html += `<div class="card-row"><span class="card-stat">${a.name}</span><span class="card-stat gold"><span class="num">${state.armory.armors[a.id]}</span> adet</span></div>`; });
+    ownedConsumables.forEach(c => { html += `<div class="card-row"><span class="card-stat">${c.name}</span><span class="card-stat gold"><span class="num">${state.armory.consumables[c.id]}</span> adet</span></div>`; });
   }
   html += `</div>`;
 
-  html += `<div class="section-label">🏪 Silah Satıcısı — Her Zaman Açık</div>`;
+  html += `<div class="section-label">Silah Satıcısı — Her Zaman Açık</div>`;
   html += renderShopCategory("Silahlar", WEAPONS, "weapons");
   html += renderShopCategory("Zırhlar", ARMORS, "armors");
   html += renderShopCategory("Sarf Malzemeleri", CONSUMABLES, "consumables");
 
-  html += `<div class="section-label">🕶️ Karaborsa İlanları</div>`;
+  html += `<div class="section-label">Karaborsa İlanları</div>`;
   if (state.blackMarketListings.length === 0) {
     html += `<div class="empty-state">Şu an aktif ilan yok. Piyasa değişkendir, tekrar kontrol et.</div>`;
   } else {
@@ -1138,7 +1150,7 @@ function renderArmoryTab() {
       html += `
         <div class="card">
           <div class="card-row">
-            <span class="card-title">${item.icon} ${item.name}</span>
+            <span class="card-title">${item.name}</span>
             <span class="badge blood">${remaining} dk kaldı</span>
           </div>
           <div class="card-desc">Kaynak: ${listing.sourceLabel}</div>
@@ -1165,7 +1177,7 @@ function renderShopCategory(title, items, category) {
   items.forEach(item => {
     html += `
       <div class="card-row">
-        <span class="card-stat">${item.icon} ${item.name}</span>
+        <span class="card-stat">${item.name}</span>
         <span style="display:flex; align-items:center; gap:8px;">
           <span class="card-stat gold"><span class="num">${fmt(item.priceShop)}</span></span>
           <button class="btn btn-outline btn-sm" data-buy-shop="${category}|${item.id}" ${state.cash < item.priceShop ? "disabled" : ""}>Satın Al</button>
@@ -1267,7 +1279,7 @@ function renderCrewTab() {
       html += `
         <div class="card">
           <div class="card-row">
-            <span class="card-title">${role.icon} ${c.name}</span>
+            <span class="card-title">${c.name}</span>
             ${c.assignedTo ? '<span class="badge blood">Görevde</span>' : '<span class="badge gold">Hazır</span>'}
           </div>
           <div class="card-stat">${role.name} · Sadakat: <span class="num">${c.loyalty}</span> · Maaş: <span class="num">${fmt(c.wage)}/sa</span></div>
@@ -1283,7 +1295,7 @@ function renderCrewTab() {
     const role = CREW_ROLES[r.role];
     html += `
       <div class="card">
-        <div class="card-title">${role.icon} ${r.name}</div>
+        <div class="card-title">${r.name}</div>
         <div class="card-desc">${role.name} · Sadakat: ${r.loyalty} · Maaş: ${fmt(r.wage)}/sa</div>
         <button class="btn btn-gold btn-sm btn-full" data-recruit="${r.id}">İşe Al (${fmt(r.wage * 10)})</button>
       </div>
@@ -1370,7 +1382,7 @@ function renderEmpireTab() {
         <div class="card-desc">Kontrol: ${isAlive ? territories.map(id => districtById(id).name).join(", ") : "Bölgesi kalmadı"}</div>
         <div class="card-stat blood">Düşmanlık: <span class="num">${state.gangRelations[g.id].hostility}</span></div>
         ${econ ? `<div class="card-stat gold">Tahmini Nakit: <span class="num">${fmt(econ.cash)}</span></div>` : ""}
-        ${isAlive ? `<button class="btn btn-blood btn-sm btn-full" style="margin-top:8px;" data-hideout-raid="${g.id}">🏚️ Hideout'a Baskın Düzenle</button>` : ""}
+        ${isAlive ? `<button class="btn btn-blood btn-sm btn-full" style="margin-top:8px;" data-hideout-raid="${g.id}">Hideout'a Baskın Düzenle</button>` : ""}
       </div>
     `;
   });
@@ -1399,7 +1411,7 @@ function openHideoutRaidPlanner(gangId) {
 
   let html = `
     <button class="close-x" id="close-raid-modal">×</button>
-    <div class="panel-title">${op.icon} ${gang.name} Hideout'u</div>
+    <div class="panel-title">${gang.name} Hideout'u</div>
     <div class="panel-subtitle">${op.description} Bu çetenin ana üssüne doğrudan saldırıyorsun — en riskli operasyon.</div>
     <div class="section-label">Ekip Ata</div>
     <div id="raid-role-slots"></div>
@@ -1420,7 +1432,7 @@ function openHideoutRaidPlanner(gangId) {
       const available = state.crew.filter(c => c.role === roleId && !c.assignedTo);
       const div = document.createElement("div");
       div.className = "role-slot";
-      div.innerHTML = `${role.icon} ${role.name}
+      div.innerHTML = `${role.name}
         <select data-slot="${slotIndex}" data-role="${roleId}">
           <option value="">— Boş —</option>
           ${available.map(c => `<option value="${c.id}">${c.name} (Sadakat ${Math.round(c.loyalty)})</option>`).join("")}
@@ -1738,13 +1750,14 @@ function startPolicePatrol() {
 function triggerRandomEvent() {
   const ev = RANDOM_EVENTS[Math.floor(Math.random() * RANDOM_EVENTS.length)];
   if (ev.type === "positive") {
-    const bonus = 2000 + Math.floor(Math.random() * 5000);
+    const bonus = 1500 + Math.floor(Math.random() * 4000);
     state.cash += bonus;
     toast(ev.name, ev.description + ` (+${fmt(bonus)})`, "positive");
   } else {
-    const penalty = 1000 + Math.floor(Math.random() * 4000);
+    // Ceza mevcut nakitle orantılı (max %8) + küçük sabit taban, erken oyunu yıkıcı olmaktan kurtarır
+    const penalty = Math.round(Math.min(4000, 400 + state.cash * 0.08));
     state.cash = Math.max(0, state.cash - penalty);
-    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 5);
+    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 4);
     toast(ev.name, ev.description + ` (-${fmt(penalty)})`, "negative");
   }
   logEvent(ev.name);
