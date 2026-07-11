@@ -29,15 +29,17 @@ function cbSetupDemo() {
   cbState.ambushMode = true;
   cbState.ambushInitiator = "player";
   cbState.round = 1;
+
+  cbPlaceEnemiesForAmbush(); // rakipler baştan hazır, oyuncu görüp buna göre yerleşir
 }
 
 let cbEnemyRosterTemplate = [];
 
 // Yerleştirme aşaması tamamlanınca çağrılır: düşmanları otomatik yerleştirir,
 // FoW'u aktif eder ve kombatı başlatır.
-function cbFinishPlacementAndStartCombat() {
+function cbPlaceEnemiesForAmbush() {
   cbEnemyRosterTemplate.forEach(template => {
-    const spot = cbFindRandomFloorTile(6); // oyuncu birimlerine en az 6 kare uzak
+    const spot = cbFindRandomFloorTile(4);
     if (!spot) return;
     const dirs = ["up", "down", "left", "right"];
     cbState.units.push({
@@ -47,10 +49,41 @@ function cbFinishPlacementAndStartCombat() {
       aimSkill: template.aimSkill, actionsLeft: { move: true, act: true }, status: "active", injuries: [],
     });
   });
+}
 
+function cbFinishPlacementAndStartCombat() {
   cbState.phase = "combat";
   cbBuildTurnOrder();
   cbLog("Pusu başladı.");
+}
+
+function cbDrawLaser(attacker, defender) {
+  const svg = document.getElementById("cb-laser-overlay");
+  const tileSize = 30;
+  const weapon = CB_WEAPONS[attacker.weapon];
+
+  const x1 = attacker.x * tileSize + tileSize / 2;
+  const y1 = attacker.y * tileSize + tileSize / 2;
+  const x2 = defender.x * tileSize + tileSize / 2;
+  const y2 = defender.y * tileSize + tileSize / 2;
+
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+  line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+  line.setAttribute("stroke", weapon.laserColor || "#e6c368");
+  line.setAttribute("stroke-width", weapon.laserWidth || 1.5);
+  line.setAttribute("class", "cb-laser-line");
+  svg.appendChild(line);
+
+  requestAnimationFrame(() => { line.classList.add("firing"); });
+  setTimeout(() => line.remove(), 550);
+}
+
+function cbSyncLaserOverlaySize() {
+  const grid = document.getElementById("cb-grid");
+  const svg = document.getElementById("cb-laser-overlay");
+  svg.setAttribute("width", grid.offsetWidth);
+  svg.setAttribute("height", grid.offsetHeight);
 }
 
 function cbAllVisibleTilesForSide(side) {
@@ -121,7 +154,7 @@ function cbRenderGrid() {
       el.dataset.x = x; el.dataset.y = y;
 
       const unit = cbUnitAt(x, y);
-      if (unit && (isVisible || unit.side === "player")) {
+      if (unit && (isVisible || unit.side === "player" || unit.status === "fleeing" || unit.status === "fled")) {
         const marker = document.createElement("div");
         marker.className = "cb-unit-marker " + unit.side + (unit.status === "down" ? " down" : "") + (cbState.selectedUnitId === unit.id ? " selected" : "");
         marker.textContent = unit.name;
@@ -133,6 +166,7 @@ function cbRenderGrid() {
       gridEl.appendChild(el);
     }
   }
+  cbSyncLaserOverlaySize();
 }
 
 function cbHandleTileClick(x, y, ev) {
@@ -259,11 +293,18 @@ function cbRenderActionPanel() {
   document.getElementById("cb-btn-move").disabled = !isPlayerTurn || !current.actionsLeft.move;
   document.getElementById("cb-btn-fire").disabled = !isPlayerTurn || !current.actionsLeft.act || current.magAmmo <= 0;
   document.getElementById("cb-btn-reload").disabled = !isPlayerTurn || !current.actionsLeft.act || current.spareMags <= 0;
+  document.getElementById("cb-btn-cover").disabled = !isPlayerTurn || !current.actionsLeft.act || current.takingCover;
+  document.getElementById("cb-btn-cover").classList.toggle("mode-active", current && current.takingCover);
   document.getElementById("cb-btn-flee").disabled = !isPlayerTurn;
   document.getElementById("cb-btn-end").disabled = !isPlayerTurn;
 
   document.getElementById("cb-btn-move").classList.toggle("mode-active", cbMode === "move");
   document.getElementById("cb-btn-fire").classList.toggle("mode-active", cbMode === "fire");
+
+  document.querySelectorAll("[data-turn]").forEach(btn => {
+    btn.disabled = !isPlayerTurn || (current && current.turnedThisTurn);
+    btn.classList.toggle("mode-active", current && current.dir === btn.dataset.turn);
+  });
 
   const statusLine = document.getElementById("cb-status-line");
   if (current) {
@@ -314,9 +355,13 @@ function cbRunEnemyAI() {
     const target = visibleTargets[0];
     const parts = ["gogus", "karin", "kol", "bacak"];
     const part = parts[Math.floor(Math.random() * parts.length)];
+    cbDrawLaser(unit, target);
     cbFire(unit, target, part);
   } else if (unit.spareMags > 0 && unit.magAmmo === 0) {
     cbReload(unit);
+  } else if (!unit.takingCover && cbHasAdjacentCover(unit) && Math.random() < 0.5) {
+    // Görünür hedef yoksa ve siperlenebilecek bir yerdeyse, %50 ihtimalle siper alır
+    cbTakeCover(unit);
   } else {
     const reachable = cbReachableTiles(unit);
     if (reachable.length > 0) {
@@ -349,6 +394,14 @@ document.getElementById("cb-btn-reload").addEventListener("click", () => {
   if (current) { cbReload(current); cbRefreshAll(); }
 });
 
+document.getElementById("cb-btn-cover").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  const ok = cbTakeCover(current);
+  if (!ok) cbLog(`${current.name} burada siperlenecek bir şey yok.`);
+  cbRefreshAll();
+});
+
 document.getElementById("cb-btn-flee").addEventListener("click", () => {
   const current = cbCurrentUnit();
   if (current) { cbStartFlee(current); cbEndUnitTurn(); cbMode = null; cbRefreshAll(); }
@@ -369,10 +422,21 @@ document.querySelectorAll("#cb-bodyparts button").forEach(btn => {
   btn.addEventListener("click", () => {
     const current = cbCurrentUnit();
     if (!current || !cbFireTargetUnit) return;
+    cbDrawLaser(current, cbFireTargetUnit);
     cbFire(current, cbFireTargetUnit, btn.dataset.part);
     cbFireTargetUnit = null;
     cbMode = null;
     document.getElementById("cb-bodyparts").style.display = "none";
+    cbRefreshAll();
+  });
+});
+
+document.querySelectorAll("[data-turn]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const current = cbCurrentUnit();
+    if (!current || current.side !== "player" || current.turnedThisTurn) return;
+    cbTurnInPlace(current, btn.dataset.turn);
+    cbMode = null;
     cbRefreshAll();
   });
 });

@@ -155,13 +155,16 @@ function cbMoveUnit(unit, tx, ty, newDir) {
   if (newDir) unit.dir = newDir;
   unit.actionsLeft.move = false;
   unit._movedThisTurn = true;
-  cbLog(`${unit.name} hareket etti (${tx},${ty}).`);
+  unit.takingCover = false; // hareket edince siper geçersiz olur
+  // Hareket sessizce gerçekleşir, log'a yazılmaz (sadece çatışma sonuçları loglanır)
 }
 
 function cbTurnInPlace(unit, newDir) {
+  if (unit.turnedThisTurn) return false;
   unit.dir = newDir;
-  unit.actionsLeft.move = false;
-  cbLog(`${unit.name} yön değiştirdi.`);
+  unit.turnedThisTurn = true;
+  // Yön değişimi sessizce gerçekleşir, log'a yazılmaz
+  return true;
 }
 
 // ---------------- SİPER (OTOMATİK) ----------------
@@ -171,9 +174,36 @@ function cbCoverBonusAgainst(defender, attacker) {
   const checkX = defender.x + dx;
   const checkY = defender.y + dy;
   const tile = cbTileAt(checkX, checkY);
+
+  // Manuel "Siper Al" aktifse: sadece siperin durduğu yön korunur, ağır ceza.
+  // Diğer yönlerden gelen saldırılar ise karakteri normalden daha savunmasız bırakır (bonus isabet, negatif "ceza").
+  if (defender.takingCover) {
+    const isCoveredTile = (tile === "obstacle" || tile === "wall");
+    if (isCoveredTile) return 0.6; // siperin olduğu yönden gelen ateşe ağır isabet düşüşü
+    return -0.2; // siperin olmadığı yönden gelen ateşe karşı ekstra savunmasız (isabet artışı)
+  }
+
+  // Otomatik/pasif siper (siper alma aktif değilken de az miktarda geçerli)
   if (tile === "obstacle") return 0.25;
   if (tile === "wall") return 0.4;
   return 0;
+}
+
+// Bir karakterin bulunduğu karenin komşularında en az bir duvar/obstacle var mı?
+// Siper alma sadece fiziksel olarak siperlenebilecek bir konumda mümkündür.
+function cbHasAdjacentCover(unit) {
+  const neighbors = [[unit.x+1,unit.y],[unit.x-1,unit.y],[unit.x,unit.y+1],[unit.x,unit.y-1]];
+  return neighbors.some(([nx,ny]) => {
+    const t = cbTileAt(nx, ny);
+    return t === "wall" || t === "obstacle";
+  });
+}
+
+function cbTakeCover(unit) {
+  if (!cbHasAdjacentCover(unit)) return false;
+  unit.takingCover = true;
+  unit.actionsLeft.act = false;
+  return true;
 }
 
 // ---------------- ATEŞ ETME / İSABET HESABI ----------------
@@ -209,7 +239,6 @@ function cbCalculateHitChance(attacker, defender, bodyPart) {
 function cbFire(attacker, defender, bodyPart) {
   const weapon = CB_WEAPONS[attacker.weapon];
   if (attacker.magAmmo <= 0) {
-    cbLog(`${attacker.name} ateş edemedi, şarjör boş.`);
     return { success: false, reason: "no_ammo" };
   }
   attacker.magAmmo -= 1;
@@ -220,7 +249,7 @@ function cbFire(attacker, defender, bodyPart) {
   const hit = roll < hitChance;
 
   if (!hit) {
-    cbLog(`${attacker.name} -> ${defender.name}: ISKA (%${hitChance} sans).`);
+    cbLog(`${defender.name} ıskalandı.`);
     return { success: true, hit: false, hitChance };
   }
 
@@ -234,21 +263,20 @@ function cbFire(attacker, defender, bodyPart) {
   defender.hp -= damage;
   cbApplyInjury(defender, bodyPart);
 
-  cbLog(`${attacker.name} -> ${defender.name}: ISABET, ${bodyPart} (${damage} hasar).`);
-
   if (instantLethal || defender.hp <= 0) {
     defender.hp = 0;
     defender.status = "dead";
-    cbLog(`${defender.name} oldu.`);
+    cbLog(`${defender.name} öldü.`);
     return { success: true, hit: true, damage, lethal: true };
   }
 
   if (defender.hp <= CB_CONSTANTS.stunThreshold) {
     defender.status = "down";
-    cbLog(`${defender.name} bayildi / soka girdi.`);
+    cbLog(`${defender.name} bayıldı.`);
     return { success: true, hit: true, damage, downed: true };
   }
 
+  cbLog(`${defender.name} vuruldu (${part.label}).`);
   return { success: true, hit: true, damage };
 }
 
@@ -261,23 +289,19 @@ function cbApplyInjury(unit, bodyPart) {
 function cbReload(unit) {
   const weapon = CB_WEAPONS[unit.weapon];
   if (unit.spareMags <= 0) {
-    cbLog(`${unit.name} yedek sarjoru yok.`);
     return false;
   }
   unit.spareMags -= 1;
   unit.magAmmo = weapon.magSize;
   unit.actionsLeft.act = false;
-  cbLog(`${unit.name} sarjor degistirdi.`);
   return true;
 }
 
 function cbBorrowAmmo(unit, downedAlly) {
   if (downedAlly.weapon !== unit.weapon) {
-    cbLog(`${downedAlly.name}'in silahi uyumsuz.`);
     return false;
   }
   if (downedAlly.spareMags <= 0 && downedAlly.magAmmo <= 0) {
-    cbLog(`${downedAlly.name}'de alinacak mermi yok.`);
     return false;
   }
   if (downedAlly.spareMags > 0) {
@@ -288,7 +312,6 @@ function cbBorrowAmmo(unit, downedAlly) {
     downedAlly.magAmmo = 0;
   }
   unit.actionsLeft.act = false;
-  cbLog(`${unit.name}, ${downedAlly.name}'den mermi aldi.`);
   return true;
 }
 
@@ -365,7 +388,7 @@ function cbCurrentUnit() {
 
 function cbEndUnitTurn() {
   const unit = cbCurrentUnit();
-  if (unit) unit._movedThisTurn = false;
+  if (unit) { unit._movedThisTurn = false; unit.turnedThisTurn = false; }
   cbState.turnIndex++;
 
   if (cbState.turnIndex >= cbState.turnOrder.length) {
