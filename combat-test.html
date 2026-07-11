@@ -26,8 +26,8 @@
   .cb-tile.floor{ background:#1d2330; }
   .cb-tile.wall{ background:#3a3226; }
   .cb-tile.obstacle{ background:#4a4438; }
-  .cb-tile.hidden{ background:#05070b !important; }
-  .cb-tile.visible-empty{ filter:brightness(1.3); }
+  .cb-tile.hidden{ filter: brightness(0.55) saturate(0.5); }
+  .cb-tile.visible-empty{ filter:brightness(1.15); }
 
   .cb-unit-marker{
     position:absolute; inset:2px; border-radius:50%;
@@ -42,7 +42,7 @@
 
   .cb-dir-arrow{ position:absolute; width:0; height:0; }
 
-  .cb-reachable{ background:rgba(201,162,75,0.18) !important; cursor:pointer; }
+  .cb-reachable{ outline: 2px solid #4a9c5d; outline-offset: -2px; cursor:pointer; background:rgba(74,156,93,0.12) !important; }
   .cb-vision{ box-shadow: inset 0 0 0 1px rgba(230,195,104,0.3); }
 
   .cb-unit-card{

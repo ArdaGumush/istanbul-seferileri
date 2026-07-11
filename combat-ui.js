@@ -41,7 +41,9 @@ function cbRenderGrid() {
 
   const visibleTiles = cbAllVisibleTilesForSide("player");
   const currentUnit = cbCurrentUnit();
-  const reachable = (cbMode === "move" && currentUnit) ? cbReachableTiles(currentUnit) : [];
+  const isPlayerTurn = currentUnit && currentUnit.side === "player" && currentUnit.status === "active";
+  const canShowReachable = isPlayerTurn && currentUnit.actionsLeft.move && (cbMode === "move" || cbMode === null);
+  const reachable = canShowReachable ? cbReachableTiles(currentUnit) : [];
   const reachableSet = new Set(reachable.map(r => `${r.x},${r.y}`));
 
   for (let y = 0; y < cbState.rows; y++) {
