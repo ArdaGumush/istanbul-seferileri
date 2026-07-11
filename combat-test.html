@@ -22,7 +22,7 @@
   #cb-bottom{ grid-column:1/4; grid-row:2; background:#12161f; border:1px solid #2a3142; border-radius:8px; padding:10px; display:flex; gap:12px; }
 
   #cb-grid{ display:grid; }
-  .cb-tile{ width:22px; height:22px; box-sizing:border-box; border:1px solid #05070b; position:relative; }
+  .cb-tile{ width:30px; height:30px; box-sizing:border-box; border:1px solid #05070b; position:relative; touch-action: manipulation; }
   .cb-tile.floor{ background:#1d2330; }
   .cb-tile.wall{ background:#3a3226; }
   .cb-tile.obstacle{ background:#4a4438; }
@@ -68,6 +68,7 @@
   }
   button:disabled{ opacity:0.3; cursor:not-allowed; }
   button.secondary{ background:#2a3142; color:#e8e6df; }
+  button.mode-active{ background:#4a9c5d; color:#0a0d14; box-shadow: 0 0 0 2px #6bc47f; }
 
   #cb-log{ flex:1; overflow-y:auto; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#9098a8; }
   #cb-actions{ width:260px; display:flex; flex-direction:column; gap:6px; }

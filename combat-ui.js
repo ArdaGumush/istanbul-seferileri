@@ -35,14 +35,14 @@ function cbAllVisibleTilesForSide(side) {
 
 function cbRenderGrid() {
   const gridEl = document.getElementById("cb-grid");
-  const tileSize = 22;
+  const tileSize = 30;
   gridEl.style.gridTemplateColumns = `repeat(${cbState.cols}, ${tileSize}px)`;
   gridEl.innerHTML = "";
 
   const visibleTiles = cbAllVisibleTilesForSide("player");
   const currentUnit = cbCurrentUnit();
   const isPlayerTurn = currentUnit && currentUnit.side === "player" && currentUnit.status === "active";
-  const canShowReachable = isPlayerTurn && currentUnit.actionsLeft.move && (cbMode === "move" || cbMode === null);
+  const canShowReachable = isPlayerTurn && cbMode === "move";
   const reachable = canShowReachable ? cbReachableTiles(currentUnit) : [];
   const reachableSet = new Set(reachable.map(r => `${r.x},${r.y}`));
 
@@ -173,6 +173,9 @@ function cbRenderActionPanel() {
   document.getElementById("cb-btn-flee").disabled = !isPlayerTurn;
   document.getElementById("cb-btn-end").disabled = !isPlayerTurn;
 
+  document.getElementById("cb-btn-move").classList.toggle("mode-active", cbMode === "move");
+  document.getElementById("cb-btn-fire").classList.toggle("mode-active", cbMode === "fire");
+
   const statusLine = document.getElementById("cb-status-line");
   if (current) {
     statusLine.textContent = `Hareket: ${current.actionsLeft.move ? "kullanılabilir" : "kullanıldı"} | Aksiyon: ${current.actionsLeft.act ? "kullanılabilir" : "kullanıldı"}`;
@@ -235,12 +238,14 @@ function cbRunEnemyAI() {
 document.getElementById("cb-btn-move").addEventListener("click", () => {
   cbMode = cbMode === "move" ? null : "move";
   cbRenderGrid();
+  cbRenderActionPanel();
 });
 
 document.getElementById("cb-btn-fire").addEventListener("click", () => {
   cbMode = cbMode === "fire" ? null : "fire";
   document.getElementById("cb-bodyparts").style.display = "none";
   cbRenderGrid();
+  cbRenderActionPanel();
 });
 
 document.getElementById("cb-btn-reload").addEventListener("click", () => {
