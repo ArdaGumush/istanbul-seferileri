@@ -90,6 +90,135 @@
   }
   .intro-btn:hover{ background: var(--gold); color: var(--bg-void); }
 
+  /* ============ SETUP WIZARD ============ */
+  #setup-screen{
+    position:fixed; inset:0; z-index:999;
+    background: var(--bg-void);
+    display:flex; align-items:center; justify-content:center;
+    background-image: radial-gradient(ellipse at 50% 0%, rgba(201,162,75,0.06), transparent 55%);
+  }
+  #setup-card{
+    width: 560px; max-width: 92vw; max-height: 88vh;
+    overflow-y:auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 32px 36px;
+  }
+  #setup-progress{
+    display:flex; gap:6px;
+    margin-bottom: 26px;
+  }
+  .setup-dot{
+    flex:1; height:3px;
+    background: var(--line);
+    border-radius: 2px;
+    transition: background 0.3s ease;
+  }
+  .setup-dot.done{ background: var(--gold); }
+  .setup-dot.current{ background: var(--gold-bright); }
+
+  .setup-eyebrow{
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 2.5px;
+    color: var(--gold);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .setup-title{
+    font-family: var(--font-display);
+    font-size: 34px;
+    letter-spacing: 1px;
+    color: var(--ink);
+    margin-bottom: 8px;
+  }
+  .setup-desc{
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    line-height: 1.6;
+    margin-bottom: 24px;
+  }
+
+  .setup-input{
+    width:100%;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 15px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    margin-bottom: 14px;
+  }
+  .setup-input:focus{ outline:none; border-color: var(--gold); }
+  .setup-label{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 1px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    display:block;
+  }
+
+  .option-card{
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    cursor:pointer;
+    transition: all 0.2s ease;
+  }
+  .option-card:hover{ border-color: var(--ink-faint); }
+  .option-card.selected{ border-color: var(--gold); background: rgba(201,162,75,0.08); }
+  .option-title{
+    font-family: var(--font-body);
+    font-weight:600;
+    font-size: 15px;
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom: 5px;
+  }
+  .option-title .check{ color: var(--gold-bright); opacity:0; }
+  .option-card.selected .check{ opacity:1; }
+  .option-desc{
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    line-height: 1.5;
+    margin-bottom: 8px;
+  }
+  .option-buff{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--gold-bright);
+  }
+  .option-drawback{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--blood-bright);
+    margin-top: 2px;
+  }
+
+  .setup-nav{
+    display:flex; justify-content:space-between;
+    margin-top: 26px;
+    gap: 12px;
+  }
+  .setup-nav .btn{ padding: 11px 24px; font-size: 12px; }
+  .setup-summary-row{
+    display:flex; justify-content:space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  .setup-summary-row:last-child{ border-bottom:none; }
+  .setup-summary-row .label{ color: var(--ink-faint); }
+  .setup-summary-row .value{ color: var(--gold-bright); font-weight:600; }
+
   /* ============ APP SHELL ============ */
   #app{
     height:100vh;
@@ -165,52 +294,62 @@
     overflow:hidden;
     background: var(--bg-void);
   }
-  #map-svg{ width:100%; height:100%; display:block; }
+  #map-bg{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit: cover;
+    object-position: center;
+    opacity: 0.9;
+  }
+  #map-svg{ position:absolute; inset:0; width:100%; height:100%; display:block; z-index:2; }
   .water{ fill: #0d1622; }
   .district-shape{
     fill: var(--bg-panel-raised);
     stroke: var(--line);
-    stroke-width: 1;
+    stroke-width: 0.3;
     transition: fill 0.3s ease, stroke 0.3s ease;
     cursor:pointer;
   }
-  .district-shape:hover{ stroke: var(--gold); stroke-width: 1.5; }
+  .district-shape:hover{ stroke: var(--gold); stroke-width: 0.4; }
   .district-shape.owned{ fill: rgba(201,162,75,0.18); stroke: var(--gold); }
   .district-shape.rival{ fill: rgba(165,52,46,0.14); }
-  .district-shape.selected{ stroke: var(--gold-bright); stroke-width: 2.5; }
+  .district-shape.selected{ stroke: var(--gold-bright); stroke-width: 0.6; }
 
   .district-node{ cursor:pointer; }
   .district-dot{
-    r: 7;
+    r: 2.2;
     fill: var(--bg-panel);
     stroke: var(--ink-faint);
-    stroke-width: 1.5;
+    stroke-width: 0.4;
     transition: all 0.3s ease;
   }
   .district-dot.owned{ fill: var(--gold); stroke: var(--gold-bright); }
   .district-dot.rival{ fill: var(--blood); stroke: var(--blood-bright); }
-  .district-dot.selected{ stroke: var(--ink); stroke-width: 2.5; }
+  .district-dot.selected{ stroke: var(--ink); stroke-width: 0.6; }
   .district-pulse{
-    r: 7; fill: none;
+    r: 2.2; fill: none;
     stroke: var(--blood);
-    stroke-width: 2;
+    stroke-width: 0.5;
     opacity: 0;
   }
-  .district-pulse.active{ animation: pulse-heat 1.8s ease-out infinite; }
+  .district-pulse.active{ animation: pulse-heat 2.2s ease-out infinite; }
   @keyframes pulse-heat{
-    0%{ r:7; opacity:0.8; }
-    100%{ r:22; opacity:0; }
+    0%{ r:2.2; opacity:0.7; }
+    100%{ r:6; opacity:0; }
   }
   .district-label{
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 2.4px;
     fill: var(--ink-dim);
-    letter-spacing: 0.5px;
+    letter-spacing: 0.02px;
     pointer-events: none;
     text-anchor: middle;
+    paint-order: stroke;
+    stroke: #05070b;
+    stroke-width: 0.5px;
   }
-  .district-label.owned{ fill: var(--gold-bright); }
-  .map-edge{ stroke: var(--line-soft); stroke-width:1; fill:none; }
+  .district-label.owned{ fill: var(--gold-bright); font-weight:600; }
+  .map-edge{ stroke: var(--gold); stroke-width:0.3; fill:none; opacity:0.35; }
 
   #map-legend{
     position:absolute; bottom:16px; left:16px;
@@ -458,9 +597,16 @@
   <button class="intro-btn" id="start-btn">Oyuna Başla</button>
 </div>
 
+<div id="setup-screen" style="display:none;">
+  <div id="setup-card">
+    <div id="setup-progress"></div>
+    <div id="setup-step-content"></div>
+  </div>
+</div>
+
 <div id="app" style="display:none;">
   <div id="topbar">
-    <div class="brand">KARANLIK ŞEHİR</div>
+    <div class="brand" id="topbar-brand">KARANLIK ŞEHİR</div>
     <div class="stat-chip cash">💵 <span class="val" id="stat-cash">₺0</span></div>
     <div class="stat-chip">🏙️ <span class="val" id="stat-districts">0</span> bölge</div>
     <div class="stat-chip">👥 <span class="val" id="stat-crew">0</span> adam</div>
@@ -478,7 +624,8 @@
 
   <div id="main">
     <div id="map-wrap">
-      <svg id="map-svg" viewBox="0 0 100 65" preserveAspectRatio="xMidYMid meet"></svg>
+      <img id="map-bg" src="istanbul-map-bg.jpg" alt="">
+      <svg id="map-svg" viewBox="0 0 131.2 81.6" preserveAspectRatio="xMidYMid meet"></svg>
       <div id="map-legend">
         <div class="legend-item"><div class="legend-dot" style="background:var(--gold)"></div>Senin bölgen</div>
         <div class="legend-item"><div class="legend-dot" style="background:var(--blood)"></div>Rakip çete</div>
@@ -491,6 +638,7 @@
         <button class="tab-btn active" data-tab="district">Bölge</button>
         <button class="tab-btn" data-tab="drugs">Üretim</button>
         <button class="tab-btn" data-tab="heist">Soygun</button>
+        <button class="tab-btn" data-tab="armory">Silahlar</button>
         <button class="tab-btn" data-tab="crew">Ekip</button>
         <button class="tab-btn" data-tab="empire">İmparatorluk</button>
       </div>
@@ -502,6 +650,7 @@
 <div class="toast-stack" id="toast-stack"></div>
 
 <script src="game-data.js"></script>
+<script src="road-network.js"></script>
 <script src="game-engine.js"></script>
 </body>
 </html>
