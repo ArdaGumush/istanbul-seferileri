@@ -355,6 +355,29 @@ function cbEndUnitTurn() {
       if (u.status === "active") u.actionsLeft = { move: true, act: true };
     });
   }
+
+  // Bu round'un sırasında artık aktif/kaçan olmayan (öldü, bayıldı, teslim oldu vb.)
+  // birimleri otomatik atla - yoksa sıra onlarda "takılı" kalır.
+  let safetyCounter = 0;
+  while (safetyCounter < cbState.turnOrder.length + 5) {
+    const curr = cbCurrentUnit();
+    if (!curr) break;
+    const stillTakesTurn = curr.status === "active" || curr.status === "fleeing";
+    if (stillTakesTurn) break;
+    cbState.turnIndex++;
+    if (cbState.turnIndex >= cbState.turnOrder.length) {
+      cbState.round++;
+      cbState.units.forEach(u => { if (u.status === "fleeing") cbProcessFleeTick(u); });
+      ["player", "enemy"].forEach(side => {
+        if (cbTeamOutOfAmmo(side)) cbResolveTeamCrisis(side);
+      });
+      cbBuildTurnOrder();
+      cbState.units.forEach(u => {
+        if (u.status === "active") u.actionsLeft = { move: true, act: true };
+      });
+    }
+    safetyCounter++;
+  }
 }
 
 function cbCheckVictory() {

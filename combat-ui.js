@@ -258,10 +258,15 @@ document.getElementById("cb-btn-flee").addEventListener("click", () => {
   if (current) { cbStartFlee(current); cbEndUnitTurn(); cbMode = null; cbRefreshAll(); }
 });
 
-document.getElementById("cb-btn-end").addEventListener("click", () => {
+document.getElementById("cb-btn-end").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  const btn = ev.currentTarget;
+  if (btn.dataset.processing === "1") return;
+  btn.dataset.processing = "1";
   cbEndUnitTurn();
   cbMode = null;
   cbRefreshAll();
+  btn.dataset.processing = "0";
 });
 
 document.querySelectorAll("#cb-bodyparts button").forEach(btn => {
