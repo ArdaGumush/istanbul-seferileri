@@ -18,10 +18,10 @@ function cbSetupDemo() {
     { id: cbUid(), name: "R", side: "player", dir: "up", hp: 300, weapon: "makineli_low", magAmmo: 20, spareMags: 1, aimSkill: 0, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
   ];
   cbEnemyRosterTemplate = [
-    { name: "A", weapon: "tabanca_low", magAmmo: 8, spareMags: 1, aimSkill: 8 },
-    { name: "B", weapon: "makineli_low", magAmmo: 20, spareMags: 0, aimSkill: 0 },
-    { name: "C", weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5 },
-    { name: "D", weapon: "tufek_low", magAmmo: 5, spareMags: 0, aimSkill: 12 },
+    { name: "A", weapon: "tabanca_low", magAmmo: 8, spareMags: 1, aimSkill: 8, personality: "agresif" },
+    { name: "B", weapon: "makineli_low", magAmmo: 20, spareMags: 0, aimSkill: 0, personality: "agresif" },
+    { name: "C", weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, personality: "savunmaci" },
+    { name: "D", weapon: "tufek_low", magAmmo: 5, spareMags: 0, aimSkill: 12, personality: "sinsi" },
   ];
 
   cbState.units = [];
@@ -46,7 +46,8 @@ function cbPlaceEnemiesForAmbush() {
       id: cbUid(), name: template.name, side: "enemy",
       x: spot.x, y: spot.y, dir: dirs[Math.floor(Math.random() * dirs.length)],
       hp: 300, weapon: template.weapon, magAmmo: template.magAmmo, spareMags: template.spareMags,
-      aimSkill: template.aimSkill, actionsLeft: { move: true, act: true }, status: "active", injuries: [],
+      aimSkill: template.aimSkill, personality: template.personality || "agresif",
+      actionsLeft: { move: true, act: true }, status: "active", injuries: [],
     });
   });
 }
@@ -334,8 +335,10 @@ function cbRefreshAll() {
   cbRenderLog();
 
   const victory = cbCheckVictory();
-  if (victory) {
-    setTimeout(() => alert(`${victory === "player" ? "Oyuncu" : "Düşman"} kazandı!`), 100);
+  if (victory && cbState.phase !== "aftermath") {
+    cbState.phase = "aftermath";
+    cbState.victoryResult = victory;
+    setTimeout(cbShowAftermathScreen, 300);
     return;
   }
 
@@ -350,27 +353,21 @@ function cbRunEnemyAI() {
   const unit = cbCurrentUnit();
   if (!unit || unit.side !== "enemy" || unit.status !== "active") { cbRefreshAll(); return; }
 
-  const visibleTargets = cbVisibleEnemies(unit);
-  if (visibleTargets.length > 0 && unit.magAmmo > 0) {
-    const target = visibleTargets[0];
-    const parts = ["gogus", "karin", "kol", "bacak"];
-    const part = parts[Math.floor(Math.random() * parts.length)];
-    cbDrawLaser(unit, target);
-    cbFire(unit, target, part);
-  } else if (unit.spareMags > 0 && unit.magAmmo === 0) {
+  const decision = cbDecideEnemyAction(unit); // combat-engine.js içinde tanımlı, gelişmiş AI mantığı
+  if (decision.type === "fire") {
+    cbDrawLaser(unit, decision.target);
+    cbFire(unit, decision.target, decision.bodyPart);
+  } else if (decision.type === "reload") {
     cbReload(unit);
-  } else if (!unit.takingCover && cbHasAdjacentCover(unit) && Math.random() < 0.5) {
-    // Görünür hedef yoksa ve siperlenebilecek bir yerdeyse, %50 ihtimalle siper alır
+  } else if (decision.type === "cover") {
     cbTakeCover(unit);
-  } else {
-    const reachable = cbReachableTiles(unit);
-    if (reachable.length > 0) {
-      const dest = reachable[Math.floor(Math.random() * reachable.length)];
-      cbMoveUnit(unit, dest.x, dest.y, unit.dir);
-    }
-    unit.actionsLeft.act = false;
+  } else if (decision.type === "move") {
+    cbMoveUnit(unit, decision.x, decision.y, decision.dir);
   }
+  // 'wait' durumunda hiçbir şey yapılmaz, sadece sıra biter
+
   unit.actionsLeft.move = false;
+  unit.actionsLeft.act = false;
   cbEndUnitTurn();
   cbRefreshAll();
 }
@@ -440,6 +437,91 @@ document.querySelectorAll("[data-turn]").forEach(btn => {
     cbRefreshAll();
   });
 });
+
+// ============================================================
+// ZAFER SONRASI EKRANI (İnfaz / Kaçır / Terk Et)
+// ============================================================
+let cbCapturedUnits = []; // { unit, decision: 'execute'|'capture'|'release' }
+
+function cbShowAftermathScreen() {
+  const overlay = document.getElementById("cb-aftermath-overlay");
+  const panel = document.getElementById("cb-aftermath-panel");
+  const won = cbState.victoryResult === "player";
+
+  const downedEnemies = won ? cbState.units.filter(u => u.side === "enemy" && u.status === "down") : [];
+
+  let html = `<h3 style="color:${won ? '#4a9c5d' : '#d4453d'}; font-size:16px; margin-bottom:10px;">${won ? "Zafer" : "Yenilgi"}</h3>`;
+
+  if (!won) {
+    html += `<div style="color:#9098a8; font-size:12px; margin-bottom:14px;">Ekibin yenildi.</div>`;
+    html += `<button id="cb-aftermath-close">Kapat</button>`;
+    panel.innerHTML = html;
+    overlay.style.display = "flex";
+    document.getElementById("cb-aftermath-close").addEventListener("click", () => {
+      overlay.style.display = "none";
+    });
+    return;
+  }
+
+  if (downedEnemies.length === 0) {
+    html += `<div style="color:#9098a8; font-size:12px; margin-bottom:14px;">Tüm düşmanlar öldürüldü veya kaçtı. Ele geçirilecek kimse yok.</div>`;
+    html += `<button id="cb-aftermath-close">Kapat</button>`;
+    panel.innerHTML = html;
+    overlay.style.display = "flex";
+    document.getElementById("cb-aftermath-close").addEventListener("click", () => {
+      overlay.style.display = "none";
+    });
+    return;
+  }
+
+  html += `<div style="color:#9098a8; font-size:12px; margin-bottom:14px;">Bayılmış düşmanlar ele geçirildi. Her biri için ne yapılacağına karar ver.</div>`;
+  html += `<div id="cb-aftermath-list"></div>`;
+  html += `<button id="cb-aftermath-confirm" style="margin-top:12px;">Onayla ve Devam Et</button>`;
+  panel.innerHTML = html;
+
+  const listEl = document.getElementById("cb-aftermath-list");
+  const decisions = {}; // unitId -> 'execute'|'capture'|'release'
+  downedEnemies.forEach(u => { decisions[u.id] = "release"; });
+
+  downedEnemies.forEach(u => {
+    const item = document.createElement("div");
+    item.style.cssText = "background:#1d2330; border:1px solid #2a3142; border-radius:6px; padding:10px; margin-bottom:8px; font-size:11px;";
+    item.innerHTML = `
+      <div style="font-weight:600; margin-bottom:6px;">${u.name}</div>
+      <div style="display:flex; gap:6px;">
+        <button class="secondary" data-decision="execute" data-unit="${u.id}">İnfaz Et</button>
+        <button class="secondary" data-decision="capture" data-unit="${u.id}">Kaçır</button>
+        <button class="secondary mode-active" data-decision="release" data-unit="${u.id}">Terk Et</button>
+      </div>
+    `;
+    listEl.appendChild(item);
+
+    item.querySelectorAll("[data-decision]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        decisions[u.id] = btn.dataset.decision;
+        item.querySelectorAll("[data-decision]").forEach(b => b.classList.remove("mode-active"));
+        btn.classList.add("mode-active");
+      });
+    });
+  });
+
+  document.getElementById("cb-aftermath-confirm").addEventListener("click", () => {
+    downedEnemies.forEach(u => {
+      const decision = decisions[u.id];
+      if (decision === "execute") {
+        u.status = "dead";
+      } else if (decision === "capture") {
+        u.status = "captured";
+        cbCapturedUnits.push(u);
+      }
+      // 'release' durumunda unit'e dokunulmaz, olduğu gibi kalır (sahneden ayrılmış sayılır)
+    });
+    overlay.style.display = "none";
+    cbLog(`Operasyon tamamlandı. ${cbCapturedUnits.length} mahkum ele geçirildi.`);
+  });
+
+  overlay.style.display = "flex";
+}
 
 document.getElementById("cb-btn-start-ambush").addEventListener("click", () => {
   cbFinishPlacementAndStartCombat();

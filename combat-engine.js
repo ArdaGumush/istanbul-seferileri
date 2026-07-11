@@ -12,7 +12,8 @@ const cbState = {
   ambushInitiator: null, // 'player' | 'enemy'
   selectedUnitId: null,
   pendingAction: null, // 'move' | 'fire' | null
-  phase: "placement", // 'placement' | 'combat' - ambush senaryosunda iki aşamalı akış
+  phase: "placement", // 'placement' | 'combat' | 'aftermath' - ambush senaryosunda çok aşamalı akış
+  victoryResult: null, // 'player' | 'enemy' - savaş bitince belirlenir
   log: [],
 };
 
@@ -435,4 +436,170 @@ function cbCheckVictory() {
   if (!enemyAlive) return "player";
   if (!playerAlive) return "enemy";
   return null;
+}
+
+// ============================================================
+// AI KARAR MOTORU
+// ============================================================
+// Kişilik profilleri: agresif = ileri atılır, az siper alır, yakın hedefe öncelik verir
+//                      sinsi = kritik/ölümcül bölgeye nişan alır, mesafeyi korur
+//                      savunmaci = sık siper alır, düşük canda geri çekilir, temkinli hareket eder
+const CB_PERSONALITY_PROFILES = {
+  agresif: { coverChance: 0.25, retreatHpRatio: 0.15, preferNearest: true, criticalPartChance: 0.15 },
+  sinsi: { coverChance: 0.45, retreatHpRatio: 0.35, preferNearest: false, criticalPartChance: 0.45 },
+  savunmaci: { coverChance: 0.65, retreatHpRatio: 0.5, preferNearest: false, criticalPartChance: 0.1 },
+};
+
+function cbGetPersonalityProfile(unit) {
+  return CB_PERSONALITY_PROFILES[unit.personality] || CB_PERSONALITY_PROFILES.agresif;
+}
+
+// ---- 1. HEDEF SEÇİMİ: ağırlıklı puanlama ----
+// Puan = yakınlık + düşük can + (müttefik tarafından zaten hasarlanmışsa bonus)
+function cbScoreTarget(unit, target, allAllyTargets) {
+  const dist = Math.abs(unit.x - target.x) + Math.abs(unit.y - target.y);
+  const weapon = CB_WEAPONS[unit.weapon];
+
+  let score = 0;
+  // Yakınlık: menzil içindeyse ve yakınsa yüksek puan (menzil dışına küçük ceza, yine de hedeflenebilir sayılır)
+  const distScore = Math.max(0, (weapon.range - dist) / weapon.range) * 40;
+  score += distScore;
+
+  // Düşük can: canı azaldıkça öncelik artar (bitirici atış fırsatı)
+  const hpRatio = target.hp / CB_CONSTANTS.maxHP;
+  score += (1 - hpRatio) * 35;
+
+  // Takım koordinasyonu: bu tur içinde başka bir müttefik tarafından zaten hedeflenmiş/hasarlanmışsa bonus
+  const recentlyDamaged = target.injuries && target.injuries.length > 0 &&
+    target.injuries[target.injuries.length - 1].turnApplied >= cbState.round - 1;
+  if (recentlyDamaged) score += 15;
+
+  // Zaten bayılmış/kaçmakta olan hedeflere düşük öncelik (öldürücü darbe isteğe bağlı ama gereksiz risk)
+  if (target.status === "down") score -= 10;
+  if (target.status === "fleeing") score -= 5;
+
+  return score;
+}
+
+function cbChooseTarget(unit) {
+  const visible = cbVisibleEnemies(unit);
+  if (visible.length === 0) return null;
+  const profile = cbGetPersonalityProfile(unit);
+
+  const scored = visible.map(t => ({ target: t, score: cbScoreTarget(unit, t, visible) }));
+  scored.sort((a, b) => b.score - a.score);
+
+  // Agresif profil basitçe en yüksek puanlıyı seçer; diğerleri de aynı puanlamayı kullanır
+  // (preferNearest gelecekte farklı ağırlıklandırma için genişletilebilir bir kanca)
+  return scored[0].target;
+}
+
+// ---- 2. VÜCUT BÖLGESİ SEÇİMİ: beklenen hasar + kişilik ----
+function cbChooseBodyPart(unit, target) {
+  const profile = cbGetPersonalityProfile(unit);
+  const weapon = CB_WEAPONS[unit.weapon];
+
+  // Kişiliğe göre kritik bölgeye (baş/göğüs) gitme ihtimali
+  if (Math.random() < profile.criticalPartChance) {
+    return Math.random() < 0.5 ? "bas" : "gogus";
+  }
+
+  // Aksi halde: her bölge için beklenen hasarı hesaplayıp en yükseği seç
+  // (beklenen hasar = isabet şansı x bölge hasar çarpanı)
+  const candidates = ["gogus", "karin", "kol", "bacak"];
+  let best = candidates[0], bestValue = -1;
+  candidates.forEach(part => {
+    const hitChance = cbCalculateHitChance(unit, target, part);
+    const dmgMult = CB_BODY_PARTS[part].damageMult;
+    const expected = (hitChance / 100) * dmgMult;
+    if (expected > bestValue) { bestValue = expected; best = part; }
+  });
+  return best;
+}
+
+// ---- 3. HAREKET STRATEJİSİ: avlanma + temkinli siper arama ----
+// Birim son bilinen düşman konumunu hafızasında tutar (unit.lastKnownEnemyPos)
+function cbUpdateEnemyMemory(unit) {
+  const visible = cbVisibleEnemies(unit);
+  if (visible.length > 0) {
+    // En yakın görüneni hatırla
+    let closest = visible[0], closestDist = Infinity;
+    visible.forEach(t => {
+      const d = Math.abs(unit.x - t.x) + Math.abs(unit.y - t.y);
+      if (d < closestDist) { closestDist = d; closest = t; }
+    });
+    unit.lastKnownEnemyPos = { x: closest.x, y: closest.y };
+  }
+}
+
+function cbDecideMovement(unit) {
+  const profile = cbGetPersonalityProfile(unit);
+  const hpRatio = unit.hp / CB_CONSTANTS.maxHP;
+  const reachable = cbReachableTiles(unit);
+  if (reachable.length === 0) return null;
+
+  // Düşük canlıysa (kişiliğe göre eşik farklı): siper arayan temkinli hareket
+  if (hpRatio <= profile.retreatHpRatio) {
+    const coveredTiles = reachable.filter(r => {
+      const neighbors = [[r.x+1,r.y],[r.x-1,r.y],[r.x,r.y+1],[r.x,r.y-1]];
+      return neighbors.some(([nx,ny]) => {
+        const t = cbTileAt(nx, ny);
+        return t === "wall" || t === "obstacle";
+      });
+    });
+    if (coveredTiles.length > 0) {
+      // Bilinen düşmandan mümkün olduğunca uzak, ama siperli bir kareye çekil
+      if (unit.lastKnownEnemyPos) {
+        coveredTiles.sort((a, b) => {
+          const da = Math.abs(a.x - unit.lastKnownEnemyPos.x) + Math.abs(a.y - unit.lastKnownEnemyPos.y);
+          const db = Math.abs(b.x - unit.lastKnownEnemyPos.x) + Math.abs(b.y - unit.lastKnownEnemyPos.y);
+          return db - da; // en uzak önce
+        });
+      }
+      return coveredTiles[0];
+    }
+  }
+
+  // Bilinen bir düşman konumu varsa (avlanma): ona doğru ilerle
+  if (unit.lastKnownEnemyPos) {
+    reachable.sort((a, b) => {
+      const da = Math.abs(a.x - unit.lastKnownEnemyPos.x) + Math.abs(a.y - unit.lastKnownEnemyPos.y);
+      const db = Math.abs(b.x - unit.lastKnownEnemyPos.x) + Math.abs(b.y - unit.lastKnownEnemyPos.y);
+      return da - db; // en yakın önce
+    });
+    return reachable[0];
+  }
+
+  // Hiçbir bilgi yoksa rastgele keşif hareketi
+  return reachable[Math.floor(Math.random() * reachable.length)];
+}
+
+// ---- ANA KARAR FONKSİYONU ----
+// Dönen obje: { type: 'fire'|'reload'|'cover'|'move'|'wait', ...detaylar }
+function cbDecideEnemyAction(unit) {
+  cbUpdateEnemyMemory(unit);
+  const profile = cbGetPersonalityProfile(unit);
+  const target = cbChooseTarget(unit);
+
+  if (target && unit.magAmmo > 0) {
+    const bodyPart = cbChooseBodyPart(unit, target);
+    return { type: "fire", target, bodyPart };
+  }
+
+  if (unit.magAmmo <= 0 && unit.spareMags > 0) {
+    return { type: "reload" };
+  }
+
+  // Görünür hedef yok: kişiliğe göre siper alma ihtimali
+  if (!unit.takingCover && cbHasAdjacentCover(unit) && Math.random() < profile.coverChance) {
+    return { type: "cover" };
+  }
+
+  // Aksi halde hareket (avlanma ya da temkinli çekilme)
+  const dest = cbDecideMovement(unit);
+  if (dest) {
+    return { type: "move", x: dest.x, y: dest.y, dir: unit.dir };
+  }
+
+  return { type: "wait" };
 }
