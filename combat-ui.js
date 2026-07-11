@@ -294,12 +294,12 @@ function cbRenderActionPanel() {
   document.getElementById("cb-current-name").textContent = current ? current.name + " (" + current.side + ")" : "-";
   document.getElementById("cb-round").textContent = cbState.round;
 
-  const isPlayerTurn = current && current.side === "player";
+  const isPlayerTurn = !!(current && current.side === "player" && current.status === "active");
   document.getElementById("cb-btn-move").disabled = !isPlayerTurn || !current.actionsLeft.move;
   document.getElementById("cb-btn-fire").disabled = !isPlayerTurn || !current.actionsLeft.act || current.magAmmo <= 0;
   document.getElementById("cb-btn-reload").disabled = !isPlayerTurn || !current.actionsLeft.act || current.spareMags <= 0;
   document.getElementById("cb-btn-cover").disabled = !isPlayerTurn || !current.actionsLeft.act || current.takingCover;
-  document.getElementById("cb-btn-cover").classList.toggle("mode-active", current && current.takingCover);
+  document.getElementById("cb-btn-cover").classList.toggle("mode-active", isPlayerTurn && current.takingCover);
   document.getElementById("cb-btn-flee").disabled = !isPlayerTurn;
   document.getElementById("cb-btn-end").disabled = !isPlayerTurn;
 
@@ -307,12 +307,12 @@ function cbRenderActionPanel() {
   document.getElementById("cb-btn-fire").classList.toggle("mode-active", cbMode === "fire");
 
   document.querySelectorAll("[data-turn]").forEach(btn => {
-    btn.disabled = !isPlayerTurn || (current && current.turnedThisTurn);
-    btn.classList.toggle("mode-active", current && current.dir === btn.dataset.turn);
+    btn.disabled = !isPlayerTurn || (isPlayerTurn && current.turnedThisTurn);
+    btn.classList.toggle("mode-active", isPlayerTurn && current.dir === btn.dataset.turn);
   });
 
   const statusLine = document.getElementById("cb-status-line");
-  if (current) {
+  if (isPlayerTurn) {
     statusLine.textContent = `Hareket: ${current.actionsLeft.move ? "kullanılabilir" : "kullanıldı"} | Aksiyon: ${current.actionsLeft.act ? "kullanılabilir" : "kullanıldı"}`;
   } else {
     statusLine.textContent = "";
