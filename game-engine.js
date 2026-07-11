@@ -297,19 +297,8 @@ function renderMap() {
     svg.appendChild(vg);
   });
 
-  // Hideout işaretleri (rakip çeteler + polis) - küçük kare simge
-  RIVAL_GANGS.forEach(gang => {
-    if (rivalDistrictIds(gang.id).length === 0) return;
-    const d = districtById(gang.hideoutDistrict);
-    if (!d) return;
-    const rect = document.createElementNS(ns, "rect");
-    rect.setAttribute("x", d.x - 1.1); rect.setAttribute("y", d.y + 3.2);
-    rect.setAttribute("width", "2.2"); rect.setAttribute("height", "2.2");
-    rect.setAttribute("fill", "none");
-    rect.setAttribute("stroke", gang.color);
-    rect.setAttribute("stroke-width", "0.35");
-    svg.appendChild(rect);
-  });
+  // Not: Hideout ayrı bir görsel işaretle gösterilmiyor; rakip çetenin
+  // kontrolündeki bölgeler zaten kendi rengiyle boyalı, bu yeterli bir ayrım sağlıyor.
 }
 
 function vehicleColor(v) {
