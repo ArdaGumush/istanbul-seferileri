@@ -7,22 +7,50 @@ let cbFireTargetUnit = null;
 
 function cbUid() { return Math.random().toString(36).slice(2, 9); }
 
-function cbSetupDemo() {
-  cbState.units = [
-    { id: cbUid(), name: "Q", side: "player", x: 3, y: 15, dir: "up", hp: 300, weapon: "tabanca_low", magAmmo: 8, spareMags: 2, aimSkill: 10, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "W", side: "player", x: 4, y: 16, dir: "up", hp: 300, weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "E", side: "player", x: 2, y: 16, dir: "right", hp: 300, weapon: "tufek_low", magAmmo: 5, spareMags: 1, aimSkill: 15, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "R", side: "player", x: 3, y: 17, dir: "up", hp: 300, weapon: "makineli_low", magAmmo: 20, spareMags: 1, aimSkill: 0, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+let cbPlacementRoster = []; // yerleştirme aşamasında henüz konumlanmamış oyuncu birimleri
+let cbPlacingUnitId = null; // şu an yerleştirilmekte olan birim
 
-    { id: cbUid(), name: "A", side: "enemy", x: 10, y: 8, dir: "down", hp: 300, weapon: "tabanca_low", magAmmo: 8, spareMags: 1, aimSkill: 8, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "B", side: "enemy", x: 11, y: 9, dir: "down", hp: 300, weapon: "makineli_low", magAmmo: 20, spareMags: 0, aimSkill: 0, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "C", side: "enemy", x: 9, y: 9, dir: "left", hp: 300, weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "D", side: "enemy", x: 10, y: 10, dir: "down", hp: 300, weapon: "tufek_low", magAmmo: 5, spareMags: 0, aimSkill: 12, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+function cbSetupDemo() {
+  cbPlacementRoster = [
+    { id: cbUid(), name: "Q", side: "player", dir: "up", hp: 300, weapon: "tabanca_low", magAmmo: 8, spareMags: 2, aimSkill: 10, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "W", side: "player", dir: "up", hp: 300, weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "E", side: "player", dir: "right", hp: 300, weapon: "tufek_low", magAmmo: 5, spareMags: 1, aimSkill: 15, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "R", side: "player", dir: "up", hp: 300, weapon: "makineli_low", magAmmo: 20, spareMags: 1, aimSkill: 0, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
   ];
+  cbEnemyRosterTemplate = [
+    { name: "A", weapon: "tabanca_low", magAmmo: 8, spareMags: 1, aimSkill: 8 },
+    { name: "B", weapon: "makineli_low", magAmmo: 20, spareMags: 0, aimSkill: 0 },
+    { name: "C", weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5 },
+    { name: "D", weapon: "tufek_low", magAmmo: 5, spareMags: 0, aimSkill: 12 },
+  ];
+
+  cbState.units = [];
+  cbState.phase = "placement";
   cbState.ambushMode = true;
   cbState.ambushInitiator = "player";
   cbState.round = 1;
+}
+
+let cbEnemyRosterTemplate = [];
+
+// Yerleştirme aşaması tamamlanınca çağrılır: düşmanları otomatik yerleştirir,
+// FoW'u aktif eder ve kombatı başlatır.
+function cbFinishPlacementAndStartCombat() {
+  cbEnemyRosterTemplate.forEach(template => {
+    const spot = cbFindRandomFloorTile(6); // oyuncu birimlerine en az 6 kare uzak
+    if (!spot) return;
+    const dirs = ["up", "down", "left", "right"];
+    cbState.units.push({
+      id: cbUid(), name: template.name, side: "enemy",
+      x: spot.x, y: spot.y, dir: dirs[Math.floor(Math.random() * dirs.length)],
+      hp: 300, weapon: template.weapon, magAmmo: template.magAmmo, spareMags: template.spareMags,
+      aimSkill: template.aimSkill, actionsLeft: { move: true, act: true }, status: "active", injuries: [],
+    });
+  });
+
+  cbState.phase = "combat";
   cbBuildTurnOrder();
+  cbLog("Pusu başladı.");
 }
 
 function cbAllVisibleTilesForSide(side) {
@@ -33,15 +61,45 @@ function cbAllVisibleTilesForSide(side) {
   return visible;
 }
 
+function cbRenderPlacementPanel() {
+  const panel = document.getElementById("cb-placement-panel");
+  const actionsPanel = document.getElementById("cb-actions");
+  const isPlacement = cbState.phase === "placement";
+  panel.classList.toggle("active", isPlacement);
+  actionsPanel.style.display = isPlacement ? "none" : "flex";
+  if (!isPlacement) return;
+
+  const listEl = document.getElementById("cb-roster-list");
+  listEl.innerHTML = "";
+  cbPlacementRoster.forEach(u => {
+    const placedUnit = cbState.units.find(x => x.id === u.id);
+    const item = document.createElement("div");
+    item.className = "cb-roster-item" + (cbPlacingUnitId === u.id ? " picking" : "") + (placedUnit ? " placed" : "");
+    const weapon = CB_WEAPONS[u.weapon];
+    item.innerHTML = `<b>${u.name}</b> — ${weapon.name}${placedUnit ? ` (${placedUnit.x},${placedUnit.y})` : " — yerleştirilmedi"}`;
+    item.addEventListener("click", () => {
+      cbPlacingUnitId = cbPlacingUnitId === u.id ? null : u.id;
+      cbRefreshAll();
+    });
+    listEl.appendChild(item);
+  });
+
+  const allPlaced = cbPlacementRoster.every(u => cbState.units.find(x => x.id === u.id));
+  document.getElementById("cb-btn-start-ambush").disabled = !allPlaced;
+}
+
 function cbRenderGrid() {
   const gridEl = document.getElementById("cb-grid");
   const tileSize = 30;
   gridEl.style.gridTemplateColumns = `repeat(${cbState.cols}, ${tileSize}px)`;
   gridEl.innerHTML = "";
 
-  const visibleTiles = cbAllVisibleTilesForSide("player");
-  const currentUnit = cbCurrentUnit();
-  const isPlayerTurn = currentUnit && currentUnit.side === "player" && currentUnit.status === "active";
+  const isPlacement = cbState.phase === "placement";
+
+  // Yerleştirme aşamasında FoW devre dışı - tüm harita görünür
+  const visibleTiles = isPlacement ? null : cbAllVisibleTilesForSide("player");
+  const currentUnit = isPlacement ? null : cbCurrentUnit();
+  const isPlayerTurn = !isPlacement && currentUnit && currentUnit.side === "player" && currentUnit.status === "active";
   const canShowReachable = isPlayerTurn && cbMode === "move";
   const reachable = canShowReachable ? cbReachableTiles(currentUnit) : [];
   const reachableSet = new Set(reachable.map(r => `${r.x},${r.y}`));
@@ -50,10 +108,16 @@ function cbRenderGrid() {
     for (let x = 0; x < cbState.cols; x++) {
       const tile = cbTileAt(x, y);
       const key = `${x},${y}`;
-      const isVisible = visibleTiles.has(key);
+      const isVisible = isPlacement ? true : visibleTiles.has(key);
       const el = document.createElement("div");
       el.className = "cb-tile " + tile + (isVisible ? "" : " hidden");
       if (reachableSet.has(key)) el.className += " cb-reachable";
+
+      // Yerleştirme aşamasında: boş floor kareleri, yerleştirilebilir olarak vurgulanır
+      if (isPlacement && cbPlacingUnitId && tile === "floor" && !cbUnitAt(x, y)) {
+        el.className += " cb-placeable";
+      }
+
       el.dataset.x = x; el.dataset.y = y;
 
       const unit = cbUnitAt(x, y);
@@ -72,6 +136,11 @@ function cbRenderGrid() {
 }
 
 function cbHandleTileClick(x, y, ev) {
+  if (cbState.phase === "placement") {
+    cbHandlePlacementClick(x, y);
+    return;
+  }
+
   const current = cbCurrentUnit();
   if (!current || current.side !== "player") return;
 
@@ -97,6 +166,26 @@ function cbHandleTileClick(x, y, ev) {
 
   const unit = cbUnitAt(x, y);
   if (unit) cbShowUnitPopover(unit, ev.clientX, ev.clientY);
+}
+
+function cbHandlePlacementClick(x, y) {
+  if (!cbPlacingUnitId) return;
+  if (cbTileAt(x, y) !== "floor") {
+    cbLog("Sadece yürünebilir (floor) karelere yerleştirebilirsin.");
+    cbRefreshAll();
+    return;
+  }
+  if (cbUnitAt(x, y)) return; // dolu kare
+
+  const rosterUnit = cbPlacementRoster.find(u => u.id === cbPlacingUnitId);
+  if (!rosterUnit) return;
+
+  // Eğer bu birim daha önce yerleştirildiyse, önce eski konumundan kaldır
+  cbState.units = cbState.units.filter(u => u.id !== cbPlacingUnitId);
+
+  cbState.units.push({ ...rosterUnit, x, y });
+  cbPlacingUnitId = null;
+  cbRefreshAll();
 }
 
 function cbShowUnitPopover(unit, clientX, clientY) {
@@ -193,6 +282,13 @@ function cbRenderLog() {
 function cbRefreshAll() {
   cbRenderGrid();
   cbRenderSideLists();
+  cbRenderPlacementPanel();
+
+  if (cbState.phase === "placement") {
+    cbRenderLog();
+    return; // kombat henüz başlamadı, sıra/AI mantığı çalışmasın
+  }
+
   cbRenderActionPanel();
   cbRenderLog();
 
@@ -279,6 +375,11 @@ document.querySelectorAll("#cb-bodyparts button").forEach(btn => {
     document.getElementById("cb-bodyparts").style.display = "none";
     cbRefreshAll();
   });
+});
+
+document.getElementById("cb-btn-start-ambush").addEventListener("click", () => {
+  cbFinishPlacementAndStartCombat();
+  cbRefreshAll();
 });
 
 // ---------------- BAŞLAT ----------------

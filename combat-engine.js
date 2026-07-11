@@ -12,6 +12,7 @@ const cbState = {
   ambushInitiator: null, // 'player' | 'enemy'
   selectedUnitId: null,
   pendingAction: null, // 'move' | 'fire' | null
+  phase: "placement", // 'placement' | 'combat' - ambush senaryosunda iki aşamalı akış
   log: [],
 };
 
@@ -27,6 +28,31 @@ async function cbLoadMap(url) {
 function cbTileAt(x, y) {
   if (y < 0 || y >= cbState.rows || x < 0 || x >= cbState.cols) return "wall";
   return cbState.grid[y][x];
+}
+
+function cbIsFloorAndEmpty(x, y) {
+  if (cbTileAt(x, y) !== "floor") return false;
+  return !cbUnitAt(x, y);
+}
+
+// Haritada rastgele bir floor karesi bulur (düşman otomatik yerleşimi için).
+// avoidNear: bu koordinatlara çok yakın olmayan bir yer tercih edilir (opsiyonel).
+function cbFindRandomFloorTile(minDistFromPlayers) {
+  const playerUnits = cbState.units.filter(u => u.side === "player");
+  const candidates = [];
+  for (let y = 0; y < cbState.rows; y++) {
+    for (let x = 0; x < cbState.cols; x++) {
+      if (cbTileAt(x, y) !== "floor") continue;
+      if (cbUnitAt(x, y)) continue;
+      if (minDistFromPlayers) {
+        const tooClose = playerUnits.some(p => Math.abs(p.x - x) + Math.abs(p.y - y) < minDistFromPlayers);
+        if (tooClose) continue;
+      }
+      candidates.push({ x, y });
+    }
+  }
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 // ---------------- BİRİM YÖNETİMİ ----------------
