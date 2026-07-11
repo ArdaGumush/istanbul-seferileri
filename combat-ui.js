@@ -38,13 +38,17 @@ let cbEnemyRosterTemplate = [];
 // Yerleştirme aşaması tamamlanınca çağrılır: düşmanları otomatik yerleştirir,
 // FoW'u aktif eder ve kombatı başlatır.
 function cbPlaceEnemiesForAmbush() {
-  cbEnemyRosterTemplate.forEach(template => {
-    const spot = cbFindRandomFloorTile(4);
+  const spots = cbFindClusteredFloorTiles(cbEnemyRosterTemplate.length, 4);
+  const dirs = ["up", "down", "left", "right"];
+  // Tüm grup aynı genel yöne baksın (bir arada duran, henüz tetikte olmayan bir ekip hissi)
+  const groupDir = dirs[Math.floor(Math.random() * dirs.length)];
+
+  cbEnemyRosterTemplate.forEach((template, i) => {
+    const spot = spots[i];
     if (!spot) return;
-    const dirs = ["up", "down", "left", "right"];
     cbState.units.push({
       id: cbUid(), name: template.name, side: "enemy",
-      x: spot.x, y: spot.y, dir: dirs[Math.floor(Math.random() * dirs.length)],
+      x: spot.x, y: spot.y, dir: groupDir,
       hp: 300, weapon: template.weapon, magAmmo: template.magAmmo, spareMags: template.spareMags,
       aimSkill: template.aimSkill, personality: template.personality || "agresif",
       actionsLeft: { move: true, act: true }, status: "active", injuries: [],

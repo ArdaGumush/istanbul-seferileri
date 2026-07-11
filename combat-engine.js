@@ -56,6 +56,51 @@ function cbFindRandomFloorTile(minDistFromPlayers) {
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
+// Bir grup birimi TEK bir bölgede kümeli (birbirine yakın) yerleştirmek için:
+// önce oyuncudan uzak bir "merkez" nokta bulur, sonra BFS ile o merkeze yakın
+// count kadar boş floor karesi toplar. Pusuya uğrayan taraf dağınık değil,
+// gerçekçi bir grup halinde durur.
+function cbFindClusteredFloorTiles(count, minDistFromPlayers) {
+  const center = cbFindRandomFloorTile(minDistFromPlayers);
+  if (!center) return [];
+
+  const visited = new Set([`${center.x},${center.y}`]);
+  const queue = [center];
+  const cluster = [center];
+
+  while (queue.length > 0 && cluster.length < count) {
+    const curr = queue.shift();
+    const neighbors = [
+      { x: curr.x + 1, y: curr.y }, { x: curr.x - 1, y: curr.y },
+      { x: curr.x, y: curr.y + 1 }, { x: curr.x, y: curr.y - 1 },
+    ];
+    // Komşuları rastgele sırala ki küme her seferinde farklı bir şekil alsın
+    neighbors.sort(() => Math.random() - 0.5);
+    neighbors.forEach(n => {
+      const key = `${n.x},${n.y}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      if (cbTileAt(n.x, n.y) !== "floor") return;
+      if (cbUnitAt(n.x, n.y)) return;
+      cluster.push(n);
+      queue.push(n);
+    });
+  }
+
+  // Eğer küme yeterince büyüyemediyse (dar bir köşeye sıkıştıysa), eksik kalan
+  // kadarını haritanın başka bir yerinden rastgele tamamla (garanti yerleşim için).
+  while (cluster.length < count) {
+    const fallback = cbFindRandomFloorTile(minDistFromPlayers);
+    if (!fallback) break;
+    const key = `${fallback.x},${fallback.y}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    cluster.push(fallback);
+  }
+
+  return cluster.slice(0, count);
+}
+
 // ---------------- BİRİM YÖNETİMİ ----------------
 function cbUnitAt(x, y) {
   return cbState.units.find(u => u.x === x && u.y === y && u.status !== "dead" && u.status !== "fled");
