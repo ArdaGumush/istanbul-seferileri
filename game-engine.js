@@ -29,10 +29,62 @@ const state = {
   activeCounterOps: [], // { type, targetVehicleId, crewIds, finishesAtMin, successChance }
 
   armory: { weapons: {}, armors: {}, consumables: {} }, // id -> adet
+
+  garage: [], // { id, vehicleTypeId, durability, status: 'available'|'on_mission', currentDistrictId }
+
+  captives: [], // { id, name, sourceGangId, hp, maxHpAtCapture, loyalty, lastHealAtMin, resolved: bool, districtId }
   blackMarketListings: [], // { id, itemType, itemId, price, sourceLabel, expiresAtMin, amount }
+
+  neighborhoodAssignments: {}, // crewId -> { districtId, neighborhoodName }
+  activeProductionMinigame: null, // { productId, districtId, ... } - UI tarafından yönetilir
+  dailyIncomeTracker: { lastResetDay: 1, incomeSoFar: 0, expenseSoFar: 0, lastFullDayNet: null },
+  intelMarkers: [], // { id, districtId, description, expiresAtMin } - casus tarafından üretilir
 
   log: [],
 };
+
+// ---- YARALANMA SİSTEMİ (Doktor mekaniği - combat sistemine bağlanacak) ----
+// Her injury: { bodyPart, severity, startedAtMin, healMinutesTotal, chronicChance }
+// crew üyesinde: c.injuries = [ ... ]
+const INJURY_CONFIG = {
+  bacak: { statAffected: "movement", normalPenalty: 2, chronicPenalty: 1, baseHealDays: 45, doctorHealDays: 21, chronicChanceNoDoctor: 0.25 },
+  kol: { statAffected: "accuracy", normalPenalty: 15, chronicPenalty: 8, baseHealDays: 40, doctorHealDays: 18, chronicChanceNoDoctor: 0.2 },
+  toraks: { statAffected: "general", normalPenalty: 30, chronicPenalty: 15, baseHealDays: 60, doctorHealDays: 25, chronicChanceNoDoctor: 0.35 },
+};
+
+function applyInjury(crewMember, bodyPart) {
+  const cfg = INJURY_CONFIG[bodyPart];
+  if (!cfg) return;
+  const hasDoctor = state.crew.some(c => c.role === "doktor" && !c.assignedTo);
+  const healDays = hasDoctor ? cfg.doctorHealDays : cfg.baseHealDays;
+  crewMember.injuries = crewMember.injuries || [];
+  crewMember.injuries.push({
+    bodyPart, startedAtMin: state.minutes,
+    healMinutesTotal: healDays * 24 * 60,
+    willBeChronic: hasDoctor ? false : Math.random() < cfg.chronicChanceNoDoctor,
+    resolved: false,
+  });
+}
+
+function processInjuryHealing() {
+  const hasDoctor = state.crew.some(c => c.role === "doktor" && !c.assignedTo);
+  state.crew.forEach(c => {
+    if (!c.injuries) return;
+    c.injuries.forEach(inj => {
+      if (inj.resolved) return;
+      const elapsed = state.minutes - inj.startedAtMin;
+      if (elapsed >= inj.healMinutesTotal) {
+        inj.resolved = true;
+        if (inj.willBeChronic) {
+          inj.chronic = true;
+          toast("Kalıcı Sakatlık", `${c.name}, ${inj.bodyPart} yarasından kalıcı olarak etkilendi.`, "negative");
+        } else {
+          toast("İyileşme Tamamlandı", `${c.name} tamamen iyileşti.`, "positive");
+        }
+      }
+    });
+  });
+}
 
 function initState() {
   DISTRICTS.forEach(d => {
@@ -64,9 +116,20 @@ function initState() {
   const ideology = IDEOLOGIES.find(i => i.id === state.profile.ideologyId);
   [origin, leadership, ideology].forEach(choice => { if (choice) choice.apply(state); });
 
+  // Zorluk seviyesi: ekonomi (gelir/gider) + rakip gücü + operasyon başarı bonusu
+  const difficulty = DIFFICULTY_LEVELS.find(d => d.id === state.profile.difficultyId);
+  if (difficulty) {
+    state.modifiers.businessIncomeMult = (state.modifiers.businessIncomeMult || 1) * difficulty.incomeMult;
+    state.modifiers.wageMult = (state.modifiers.wageMult || 1) * difficulty.expenseMult;
+    state.modifiers.districtCostMult = (state.modifiers.districtCostMult || 1) * difficulty.expenseMult;
+    state.modifiers.heistSuccessBonus = (state.modifiers.heistSuccessBonus || 0) + difficulty.operationSuccessBonus;
+    state.modifiers.attackSuccessBonus = (state.modifiers.attackSuccessBonus || 0) + difficulty.operationSuccessBonus;
+    state.modifiers.rivalStrengthMult = difficulty.rivalStrengthMult;
+  }
+
   if (state.modifiers.startingCashBonus) state.cash += state.modifiers.startingCashBonus;
   if (state.modifiers.freeCrewOnStart) {
-    const roleId = "sokak_lideri";
+    const roleId = "asker_devriye";
     state.crew.push({
       id: uid(), name: randomName(), role: roleId,
       wage: Math.round(CREW_ROLES[roleId].baseWage * 0.6),
@@ -189,7 +252,17 @@ function routeTravelMinutes(totalDist, speedFactor) {
 function renderTopbar() {
   const brandEl = document.getElementById("topbar-brand");
   if (brandEl && state.profile.orgName) brandEl.textContent = state.profile.orgName.toUpperCase();
-  document.getElementById("stat-cash").textContent = fmt(state.cash);
+
+  const hasAccountant = state.crew.some(c => c.role === "muhasebeci" && !c.assignedTo);
+  const cashEl = document.getElementById("stat-cash");
+  if (hasAccountant && state.dailyIncomeTracker.lastFullDayNet !== null) {
+    const net = state.dailyIncomeTracker.lastFullDayNet;
+    const sign = net >= 0 ? "+" : "";
+    const color = net >= 0 ? "var(--gold-bright)" : "var(--blood-bright)";
+    cashEl.innerHTML = `${fmt(state.cash)} <span style="font-size:10px; color:${color};">(${sign}${fmt(net)})</span>`;
+  } else {
+    cashEl.textContent = fmt(state.cash);
+  }
   document.getElementById("stat-districts").textContent = playerDistrictIds().length;
   document.getElementById("stat-crew").textContent = state.crew.length;
   document.getElementById("heat-value").textContent = Math.round(state.heat);
@@ -242,7 +315,7 @@ function renderMap() {
       const pulse = document.createElementNS(ns, "circle");
       pulse.setAttribute("cx", d.x); pulse.setAttribute("cy", d.y);
       pulse.setAttribute("class", "district-pulse active");
-      if (rivalGang) pulse.setAttribute("stroke", rivalGang.color);
+      if (rivalGang) pulse.style.stroke = rivalGang.color;
       g.appendChild(pulse);
     }
 
@@ -250,15 +323,15 @@ function renderMap() {
     dot.setAttribute("cx", d.x); dot.setAttribute("cy", d.y);
     dot.setAttribute("class", "district-dot " + statusClass + (state.selectedDistrict === d.id ? " selected" : ""));
     if (rivalGang) {
-      dot.setAttribute("fill", rivalGang.color);
-      dot.setAttribute("stroke", rivalGang.color);
+      dot.style.fill = rivalGang.color;
+      dot.style.stroke = rivalGang.color;
     }
     g.appendChild(dot);
 
     const label = document.createElementNS(ns, "text");
     label.setAttribute("x", d.x); label.setAttribute("y", d.y - 3.6);
     label.setAttribute("class", "district-label " + (statusClass === "owned" ? "owned" : ""));
-    if (rivalGang) label.setAttribute("fill", rivalGang.color);
+    if (rivalGang) label.style.fill = rivalGang.color;
     label.textContent = d.name;
     g.appendChild(label);
 
@@ -299,6 +372,24 @@ function renderMap() {
 
   // Not: Hideout ayrı bir görsel işaretle gösterilmiyor; rakip çetenin
   // kontrolündeki bölgeler zaten kendi rengiyle boyalı, bu yeterli bir ayrım sağlıyor.
+
+  // Casus istihbarat işaretleri
+  state.intelMarkers.forEach(marker => {
+    const d = districtById(marker.districtId);
+    if (!d) return;
+    const g = document.createElementNS(ns, "g");
+    g.style.cursor = "pointer";
+    g.addEventListener("click", (e) => { e.stopPropagation(); toast("İstihbarat", marker.description, "neutral"); });
+
+    const dot = document.createElementNS(ns, "circle");
+    dot.setAttribute("cx", d.x + 2.6); dot.setAttribute("cy", d.y - 2.6);
+    dot.setAttribute("r", "1.3");
+    dot.setAttribute("fill", "#2980b9");
+    dot.setAttribute("stroke", "#e8e6df");
+    dot.setAttribute("stroke-width", "0.3");
+    g.appendChild(dot);
+    svg.appendChild(g);
+  });
 }
 
 function vehicleColor(v) {
@@ -424,6 +515,7 @@ function openCounterOpPlanner(vehicleId, opKey) {
       const c = state.crew.find(x => x.id === cid);
       c.assignedTo = "counterop:" + vehicleId;
       successChance += Math.round(c.loyalty / 20);
+      if (c.role === "surucu") successChance += 8;
     });
     successChance = Math.min(92, successChance);
 
@@ -708,8 +800,16 @@ function attackDistrict(id) {
   const dObj = state.districts[id];
   const gangId = dObj.owner.split(":")[1];
   const gang = RIVAL_GANGS.find(g => g.id === gangId);
-  const myStrength = state.crew.filter(c => c.role === "silahsor" || c.role === "enforcer").length + 1;
-  let successChance = Math.min(85, Math.max(10, 50 + (myStrength - gang.strength) * 12));
+  const combatCrew = state.crew.filter(c => COMBAT_CAPABLE_ROLES.includes(c.role));
+  const myStrength = combatCrew.length + 1;
+  // En yüksek Liderlik'e sahip savaşçı "komutan" gibi davranıp ekstra başarı bonusu sağlar
+  const bestLeadership = combatCrew.reduce((max, c) => {
+    const lead = c.attributes ? c.attributes.liderlik : 8;
+    return Math.max(max, lead);
+  }, 8);
+  const leadershipBonus = (bestLeadership - 8) * 0.8; // 8 nötr taban, üstü küçük bonus
+  const effectiveRivalStrength = gang.strength * (state.modifiers.rivalStrengthMult || 1);
+  let successChance = Math.min(85, Math.max(10, 50 + (myStrength - effectiveRivalStrength) * 12 + leadershipBonus));
   successChance += (state.modifiers.attackSuccessBonus || 0);
   successChance = Math.min(95, successChance);
   const success = Math.random() * 100 < successChance;
@@ -885,27 +985,42 @@ function dispatchShipment() {
   const fromId = document.getElementById("ship-from").value;
   const toId = document.getElementById("ship-to").value;
   const vehicleType = document.getElementById("ship-vehicle").value;
-  const vehicle = VEHICLES.find(v => v.id === vehicleType);
-  if (state.cash < vehicle.cost) { toast("Yetersiz Bakiye", "Bu aracı almak için yeterli paran yok.", "negative"); return; }
+  const vehicleDef = VEHICLES.find(v => v.id === vehicleType);
+
+  // Önce filoda uygun (available, aynı türde) bir araç var mı bak
+  const garageVehicle = state.garage.find(v => v.vehicleTypeId === vehicleType && v.status === "available" && v.durability > 0);
+
+  if (!garageVehicle && state.cash < vehicleDef.cost) {
+    toast("Araç Yok", "Filonda uygun araç yok ve satın almak için yeterli paran yok.", "negative");
+    return;
+  }
 
   const startNode = districtRoadNode(fromId);
   const endNode = districtRoadNode(toId);
   const route = findRoute(startNode, endNode);
   if (!route) { toast("Rota Bulunamadı", "Bu iki bölge arasında yol tespit edilemedi.", "negative"); return; }
 
-  state.cash -= vehicle.cost;
+  let usedGarageId = null;
+  if (garageVehicle) {
+    garageVehicle.status = "on_mission";
+    usedGarageId = garageVehicle.id;
+  } else {
+    // Filoda yoksa, satıcıdan geçici (tek seferlik) araç satın al - eski davranış
+    state.cash -= vehicleDef.cost;
+  }
+
   const material = RAW_MATERIALS[Math.floor(Math.random() * RAW_MATERIALS.length)];
-  const speedFactor = 1 / vehicle.riskModifier; // düşük risk modifier = daha hızlı araç varsayımı tersine çevrilir
-  const travelTime = routeTravelMinutes(route.totalDist, 1) * vehicle.riskModifier;
+  const travelTime = routeTravelMinutes(route.totalDist, 1) * vehicleDef.riskModifier;
 
   state.vehicles.push({
     id: uid(), type: vehicleType, status: "transit", faction: "player", kind: "shipment",
-    fromId, toId, material: material.id, amount: vehicle.capacity,
+    fromId, toId, material: material.id, amount: vehicleDef.capacity,
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
     arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    garageVehicleId: usedGarageId,
   });
-  toast("Sevkiyat Yola Çıktı", `${vehicle.name} ${districtById(fromId).name}'den ${districtById(toId).name}'e hareket etti.`, "neutral");
+  toast("Sevkiyat Yola Çıktı", `${vehicleDef.name} ${districtById(fromId).name}'den ${districtById(toId).name}'e hareket etti.`, "neutral");
   render();
 }
 
@@ -922,13 +1037,23 @@ function startProduction(districtId, productId) {
   }
   product.requires.forEach(req => { state.materialStock[req.material] -= req.amount * lvl.capacity; });
 
-  lab.activeBatch = {
-    productId, totalMin: lvl.batchTimeMin,
-    finishesAtMin: state.minutes + lvl.batchTimeMin,
-    yieldAmount: product.yieldPerBatch * lvl.capacity,
-  };
-  toast("Üretim Başladı", `${product.name} üretimi başlatıldı.`, "neutral");
-  render();
+  // Üretici işe alınmışsa (ve görevde değilse) mini-oyunu atla, otomatik yüksek kaliteli sonuç üret
+  const producer = state.crew.find(c => c.role === "uretici" && !c.assignedTo);
+  if (producer) {
+    const qualityFactor = 0.85 + (producer.loyalty / 100) * 0.3; // sadakate göre %85-115 verim
+    lab.activeBatch = {
+      productId, totalMin: lvl.batchTimeMin,
+      finishesAtMin: state.minutes + lvl.batchTimeMin,
+      yieldAmount: Math.round(product.yieldPerBatch * lvl.capacity * qualityFactor),
+      auto: true,
+    };
+    toast("Üretim Başladı", `${producer.name} üretimi devraldı, otomatik yürütülüyor.`, "neutral");
+    render();
+    return;
+  }
+
+  // Üretici yoksa: oyuncu mini-oyunu oynamalı, batch mini-oyun tamamlanınca başlar
+  openProductionMinigame(districtId, productId, lvl);
 }
 
 function sellDrug(productId) {
@@ -1054,6 +1179,7 @@ function openHeistPlanner(targetId) {
       const crewMember = state.crew.find(c => c.id === cid);
       crewMember.assignedTo = "heist:" + target.id;
       successChance += Math.round(crewMember.loyalty / 20);
+      if (crewMember.role === "surucu") successChance += 8;
     });
     successChance = Math.min(95, successChance);
 
@@ -1211,6 +1337,10 @@ function smuggleListing(listingId) {
   state.cash -= listing.price;
   const travelTime = routeTravelMinutes(route.totalDist, 1);
 
+  // Filoda uygun (available) araç varsa onu kullan - mimlenme/hasar riski gerçek olsun
+  const garageVehicle = state.garage.find(v => v.status === "available" && v.durability > 0);
+  if (garageVehicle) garageVehicle.status = "on_mission";
+
   state.vehicles.push({
     id: uid(), faction: "player", kind: "weapon_smuggle", status: "transit",
     fromId, toId,
@@ -1218,6 +1348,7 @@ function smuggleListing(listingId) {
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
     arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    garageVehicleId: garageVehicle ? garageVehicle.id : null,
   });
 
   state.blackMarketListings = state.blackMarketListings.filter(l => l.id !== listingId);
@@ -1251,6 +1382,139 @@ function maybeSpawnBlackMarketListing() {
   });
 }
 
+// ---------------- TAB: GARAJ (Kalıcı Araç Filosu) ----------------
+function renderGarageTab() {
+  const el = document.getElementById("panel-content");
+  let html = `
+    <div class="panel-title">Garaj</div>
+    <div class="panel-subtitle">Araçlarını satın alıp filona kat. Operasyonlarda (nakliye, kaçakçılık, mahkum taşıma) buradan atarsın.</div>
+    <div class="section-label">Filon (${state.garage.length})</div>
+  `;
+
+  if (state.garage.length === 0) {
+    html += `<div class="empty-state">Henüz hiç aracın yok.</div>`;
+  } else {
+    state.garage.forEach(v => {
+      const def = VEHICLES.find(x => x.id === v.vehicleTypeId);
+      const durabilityPct = Math.round((v.durability / def.maxDurability) * 100);
+      const statusLabel = v.status === "available" ? "Hazır" : "Görevde";
+      const repairCost = Math.round((def.maxDurability - v.durability) * (def.cost / def.maxDurability) * 0.5);
+      const sellPrice = Math.round(def.cost * (v.flagged ? 0.06 : 0.3)); // mimlenmişse satış bedeli %80 düşer (0.3 -> 0.06)
+      const platePrice = Math.round(def.cost * 0.08);
+      html += `
+        <div class="card">
+          <div class="card-row">
+            <span class="card-title">${def.name}</span>
+            <span class="badge ${v.status === 'available' ? 'gold' : 'blood'}">${statusLabel}</span>
+          </div>
+          <div class="card-stat">Plaka: <span class="num">${v.plate}</span> ${v.flagged ? '<span class="badge blood">Mimlenmiş</span>' : ''}</div>
+          <div class="card-stat">Yük Kapasitesi: <span class="num">${def.capacity}</span> · Yolcu: <span class="num">${def.passengerCapacity}</span></div>
+          <div class="progress-track"><div class="progress-fill" style="width:${durabilityPct}%; background:${durabilityPct < 40 ? 'var(--blood)' : 'var(--gold)'};"></div></div>
+          <div class="card-stat">Dayanıklılık: <span class="num">${v.durability}/${def.maxDurability}</span></div>
+          ${v.durability < def.maxDurability ? `
+            <button class="btn btn-outline btn-sm btn-full" style="margin-top:8px;" data-repair="${v.id}" ${state.cash < repairCost ? "disabled" : ""}>Onar (${fmt(repairCost)})</button>
+          ` : ''}
+          ${v.durability <= 0 ? `<div class="card-stat blood">Bu araç kullanılamaz durumda, onarılmalı.</div>` : ''}
+          ${v.flagged ? `
+            <button class="btn btn-outline btn-sm btn-full" style="margin-top:6px;" data-replate="${v.id}" ${state.cash < platePrice ? "disabled" : ""}>Plaka Değiştir (${fmt(platePrice)})</button>
+          ` : ''}
+          <button class="btn btn-outline btn-sm btn-full" style="margin-top:6px;" data-sell-vehicle="${v.id}">Sat (${fmt(sellPrice)})</button>
+        </div>
+      `;
+    });
+  }
+
+  html += `<div class="section-label">Satıcıdan Yeni Araç Al</div>`;
+  VEHICLES.forEach(def => {
+    html += `
+      <div class="card">
+        <div class="card-title">${def.name}</div>
+        <div class="card-stat">Yük: <span class="num">${def.capacity}</span> · Yolcu: <span class="num">${def.passengerCapacity}</span> · Dayanıklılık: <span class="num">${def.maxDurability}</span></div>
+        <div class="card-row">
+          <span class="card-stat gold">Fiyat: <span class="num">${fmt(def.cost)}</span></span>
+          <button class="btn btn-gold btn-sm" data-buy-vehicle="${def.id}" ${state.cash < def.cost ? "disabled" : ""}>Satın Al</button>
+        </div>
+      </div>
+    `;
+  });
+
+  el.innerHTML = html;
+  el.querySelectorAll("[data-buy-vehicle]").forEach(b => b.addEventListener("click", () => buyVehicleForGarage(b.dataset.buyVehicle)));
+  el.querySelectorAll("[data-repair]").forEach(b => b.addEventListener("click", () => repairVehicle(b.dataset.repair)));
+  el.querySelectorAll("[data-sell-vehicle]").forEach(b => b.addEventListener("click", () => sellVehicleFromGarage(b.dataset.sellVehicle)));
+  el.querySelectorAll("[data-replate]").forEach(b => b.addEventListener("click", () => replateVehicle(b.dataset.replate)));
+}
+
+function buyVehicleForGarage(vehicleTypeId) {
+  const def = VEHICLES.find(v => v.id === vehicleTypeId);
+  if (!def || state.cash < def.cost) return;
+  state.cash -= def.cost;
+  state.garage.push({
+    id: uid(), vehicleTypeId, durability: def.maxDurability,
+    status: "available", currentDistrictId: playerDistrictIds()[0] || "tarlabasi",
+    plate: generatePlate(), flagged: false,
+  });
+  toast("Araç Satın Alındı", `${def.name} filona eklendi.`, "positive");
+  render();
+}
+
+function repairVehicle(garageId) {
+  const v = state.garage.find(x => x.id === garageId);
+  if (!v) return;
+  const def = VEHICLES.find(x => x.id === v.vehicleTypeId);
+  const repairCost = Math.round((def.maxDurability - v.durability) * (def.cost / def.maxDurability) * 0.5);
+  if (state.cash < repairCost) return;
+  state.cash -= repairCost;
+  v.durability = def.maxDurability;
+  toast("Araç Onarıldı", `${def.name} tam kapasiteye getirildi.`, "positive");
+  render();
+}
+
+function sellVehicleFromGarage(garageId) {
+  const v = state.garage.find(x => x.id === garageId);
+  if (!v) return;
+  const def = VEHICLES.find(x => x.id === v.vehicleTypeId);
+  const sellPrice = Math.round(def.cost * (v.flagged ? 0.06 : 0.3));
+  state.cash += sellPrice;
+  state.garage = state.garage.filter(x => x.id !== garageId);
+  toast("Araç Satıldı", `${def.name} filondan çıkarıldı (${fmt(sellPrice)}).`, "neutral");
+  render();
+}
+
+function replateVehicle(garageId) {
+  const v = state.garage.find(x => x.id === garageId);
+  if (!v || !v.flagged) return;
+  const def = VEHICLES.find(x => x.id === v.vehicleTypeId);
+  const cost = Math.round(def.cost * 0.08);
+  if (state.cash < cost) return;
+  state.cash -= cost;
+  v.plate = generatePlate();
+  v.flagged = false;
+  v.replatedRecently = true; // yakalanma riski normalin biraz üstünde kalır (geçici temkinli dönem)
+  toast("Plaka Değiştirildi", `${def.name} artık yeni plaka (${v.plate}) ile kayıtlı.`, "positive");
+  render();
+}
+
+// Filodan uygun (available, yeterli kapasiteli) bir araç bulur - operasyon başlatma
+// fonksiyonlarının (nakliye, kaçakçılık, mahkum taşıma) kullanması için yardımcı fonksiyon.
+function findAvailableVehicleForCargo(minCapacity) {
+  return state.garage.find(v => {
+    if (v.status !== "available") return false;
+    if (v.durability <= 0) return false;
+    const def = VEHICLES.find(x => x.id === v.vehicleTypeId);
+    return def.capacity >= (minCapacity || 0);
+  });
+}
+
+function findAvailableVehicleForPassengers(minPassengers) {
+  return state.garage.find(v => {
+    if (v.status !== "available") return false;
+    if (v.durability <= 0) return false;
+    const def = VEHICLES.find(x => x.id === v.vehicleTypeId);
+    return def.passengerCapacity >= (minPassengers || 1);
+  });
+}
+
 // ---------------- TAB: EKİP ----------------
 function renderCrewTab() {
   const el = document.getElementById("panel-content");
@@ -1265,16 +1529,50 @@ function renderCrewTab() {
   } else {
     state.crew.forEach(c => {
       const role = CREW_ROLES[c.role];
+      const assignment = state.neighborhoodAssignments[c.id];
       html += `
         <div class="card">
           <div class="card-row">
             <span class="card-title">${c.name}</span>
             ${c.assignedTo ? '<span class="badge blood">Görevde</span>' : '<span class="badge gold">Hazır</span>'}
           </div>
-          <div class="card-stat">${role.name} · Sadakat: <span class="num">${c.loyalty}</span> · Maaş: <span class="num">${fmt(c.wage)}/sa</span></div>
-          <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-fire="${c.id}">İşten Çıkar</button>
-        </div>
+          <div class="card-stat">${role.name} · Sadakat: <span class="num">${Math.round(c.loyalty)}</span> · Maaş: <span class="num">${fmt(c.wage)}/sa</span></div>
       `;
+
+      if (c.attributes) {
+        const topAttrs = Object.entries(c.attributes)
+          .sort((a, b) => b[1] - a[1]).slice(0, 3)
+          .sort((a, b) => ATTRIBUTES[a[0]].name.localeCompare(ATTRIBUTES[b[0]].name, "tr"));
+        html += `<div class="card-stat gold">${topAttrs.map(([key, val]) => `${ATTRIBUTES[key].name}: ${val}`).join(" · ")}</div>`;
+        html += `<button class="btn btn-outline btn-sm" style="margin-top:6px;" data-show-attrs="${c.id}">Tüm Özellikler</button>`;
+      }
+
+      if (c.role === "satici") {
+        if (assignment) {
+          html += `<div class="card-stat gold">Görev yeri: <span class="num">${districtById(assignment.districtId).name} — ${assignment.neighborhoodName}</span></div>`;
+          html += `<button class="btn btn-outline btn-sm" style="margin-top:8px;" data-reassign="${c.id}">Yeniden Ata</button>`;
+        } else {
+          html += `<div class="card-desc">Henüz bir mahalleye atanmadı, gelir üretmiyor.</div>`;
+          html += `<button class="btn btn-gold btn-sm" style="margin-top:8px;" data-assign="${c.id}">Mahalleye Ata</button>`;
+        }
+      } else if (c.role === "bas_satici") {
+        html += `<div class="card-desc">Kontrolündeki bölgelerde satıcıları otomatik yönetir, gelirlerinin %15'ini alır.</div>`;
+      } else if (c.role === "uretici") {
+        html += `<div class="card-desc">Atandığı laboratuvarda üretimi otomatik ve kaliteli şekilde yürütür (mini-oyunu atlar).</div>`;
+      } else if (c.role === "doktor") {
+        html += `<div class="card-desc">Yaralı ekip üyelerinin iyileşme süresini kısaltır, kronik sakatlık riskini sıfırlar.</div>`;
+      } else if (c.role === "muhasebeci") {
+        html += `<div class="card-desc">Üst barda günlük net kâr/zarar takibini aktif eder.</div>`;
+      } else if (c.role === "tamirci") {
+        html += `<div class="card-desc">Hasarlı araçları onarır, yakalanan ekipmanın bir kısmını kurtarabilir.</div>`;
+      } else if (c.role === "casus") {
+        html += `<div class="card-desc">Haritada rakip/polis operasyonlarını önceden haber verir.</div>`;
+      } else if (c.role === "surucu") {
+        html += `<div class="card-desc">Araç gerektiren operasyonlarda başarı şansını artırır.</div>`;
+      }
+
+      html += `<button class="btn btn-outline btn-sm" style="margin-top:8px;" data-fire="${c.id}">İşten Çıkar</button>`;
+      html += `</div>`;
     });
   }
 
@@ -1293,7 +1591,318 @@ function renderCrewTab() {
 
   el.innerHTML = html;
   el.querySelectorAll("[data-fire]").forEach(b => b.addEventListener("click", () => fireCrew(b.dataset.fire)));
+  el.querySelectorAll("[data-show-attrs]").forEach(b => b.addEventListener("click", () => showCrewAttributes(b.dataset.showAttrs)));
+  el.querySelectorAll("[data-assign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.assign)));
+  el.querySelectorAll("[data-reassign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.reassign)));
   el.querySelectorAll("[data-recruit]").forEach(b => b.addEventListener("click", () => recruitCrew(b.dataset.recruit)));
+}
+
+// ---------------- ÜRETİM MİNİ-OYUNU ----------------
+function openProductionMinigame(districtId, productId, lvl) {
+  const product = DRUG_PRODUCTS.find(p => p.id === productId);
+  const backdrop = document.getElementById("district-modal-backdrop");
+  const modal = document.getElementById("district-modal");
+
+  state.activeProductionMinigame = {
+    districtId, productId, lvl,
+    stepIndex: 0,
+    score: 0, // 0-100 arası birikimli başarı puanı
+    stepsTotal: product.minigame.steps.length,
+  };
+
+  renderMinigameStep();
+  backdrop.classList.add("open");
+}
+
+function renderMinigameStep() {
+  const mg = state.activeProductionMinigame;
+  if (!mg) return;
+  const product = DRUG_PRODUCTS.find(p => p.id === mg.productId);
+  const step = product.minigame.steps[mg.stepIndex];
+  const modal = document.getElementById("district-modal");
+
+  let html = `
+    <div class="panel-title">${product.name} Üretimi</div>
+    <div class="panel-subtitle">Adım ${mg.stepIndex + 1} / ${mg.stepsTotal}: ${step.label}</div>
+    <div id="minigame-content"></div>
+  `;
+  modal.innerHTML = html;
+  const content = document.getElementById("minigame-content");
+
+  if (step.type === "add_material" || step.type === "pack") {
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-desc">${step.label}. Devam etmek için hazır olduğunda onayla.</div>
+        <button class="btn btn-gold btn-full" id="minigame-confirm-step">Onayla</button>
+      </div>
+    `;
+    document.getElementById("minigame-confirm-step").addEventListener("click", () => {
+      // Basit adımlar: sabit orta-yüksek puan katkısı
+      mg.score += 20 + Math.random() * 10;
+      advanceMinigameStep();
+    });
+  } else if (step.type === "temperature") {
+    let currentTemp = (step.targetMin + step.targetMax) / 2 - 15;
+    let remaining = step.durationSec;
+    let inRangeTicks = 0, totalTicks = 0;
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-desc">Sıcaklığı ${step.targetMin}°C - ${step.targetMax}°C arasında tut. Kalan süre: <span id="mg-timer">${remaining}</span>sn</div>
+        <div style="font-family:var(--font-mono); font-size:28px; text-align:center; margin:14px 0; color:var(--gold-bright);" id="mg-temp-display">${Math.round(currentTemp)}°C</div>
+        <div class="progress-track"><div class="progress-fill" id="mg-progress" style="width:0%"></div></div>
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button class="btn btn-outline btn-full" id="mg-decrease">− Soğut</button>
+          <button class="btn btn-outline btn-full" id="mg-increase">+ Isıt</button>
+        </div>
+      </div>
+    `;
+
+    const tempDisplay = document.getElementById("mg-temp-display");
+    const timerDisplay = document.getElementById("mg-timer");
+    const progressBar = document.getElementById("mg-progress");
+
+    document.getElementById("mg-decrease").addEventListener("click", () => { currentTemp = Math.max(0, currentTemp - 4); tempDisplay.textContent = Math.round(currentTemp) + "°C"; });
+    document.getElementById("mg-increase").addEventListener("click", () => { currentTemp = currentTemp + 4; tempDisplay.textContent = Math.round(currentTemp) + "°C"; });
+
+    const interval = setInterval(() => {
+      remaining -= 1;
+      totalTicks++;
+      // Sıcaklık her saniye biraz doğal olarak düşer (soğuma eğilimi), oyuncu ısıtmalı
+      currentTemp = Math.max(0, currentTemp - 1.5);
+      tempDisplay.textContent = Math.round(currentTemp) + "°C";
+
+      const inRange = currentTemp >= step.targetMin && currentTemp <= step.targetMax;
+      if (inRange) inRangeTicks++;
+      progressBar.style.width = Math.round((totalTicks / step.durationSec) * 100) + "%";
+      if (timerDisplay) timerDisplay.textContent = Math.max(0, remaining);
+
+      if (remaining <= 0) {
+        clearInterval(interval);
+        const accuracy = inRangeTicks / totalTicks;
+        mg.score += accuracy * 30;
+        advanceMinigameStep();
+      }
+    }, 1000);
+
+    mg._activeInterval = interval;
+  } else if (step.type === "wait") {
+    let remaining = step.durationSec;
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-desc">${step.label}. Kalan süre: <span id="mg-timer">${remaining}</span>sn</div>
+        <div class="progress-track"><div class="progress-fill" id="mg-progress" style="width:0%"></div></div>
+      </div>
+    `;
+    const timerDisplay = document.getElementById("mg-timer");
+    const progressBar = document.getElementById("mg-progress");
+    let elapsed = 0;
+    const interval = setInterval(() => {
+      remaining -= 1; elapsed += 1;
+      if (timerDisplay) timerDisplay.textContent = Math.max(0, remaining);
+      progressBar.style.width = Math.round((elapsed / step.durationSec) * 100) + "%";
+      if (remaining <= 0) {
+        clearInterval(interval);
+        mg.score += 20; // bekleme adımları sabit puan
+        advanceMinigameStep();
+      }
+    }, 1000);
+    mg._activeInterval = interval;
+  }
+}
+
+function advanceMinigameStep() {
+  const mg = state.activeProductionMinigame;
+  if (!mg) return;
+  if (mg._activeInterval) { clearInterval(mg._activeInterval); mg._activeInterval = null; }
+
+  mg.stepIndex++;
+  const product = DRUG_PRODUCTS.find(p => p.id === mg.productId);
+  if (mg.stepIndex >= mg.stepsTotal) {
+    finishMinigame();
+  } else {
+    renderMinigameStep();
+  }
+}
+
+function finishMinigame() {
+  const mg = state.activeProductionMinigame;
+  if (!mg) return;
+  const product = DRUG_PRODUCTS.find(p => p.id === mg.productId);
+  const normalizedScore = Math.min(100, Math.round((mg.score / (mg.stepsTotal * 30)) * 100));
+  const qualityFactor = 0.5 + (normalizedScore / 100) * 0.7; // %50 - %120 verim aralığı
+
+  const lab = state.districts[mg.districtId].lab;
+  lab.activeBatch = {
+    productId: mg.productId, totalMin: mg.lvl.batchTimeMin,
+    finishesAtMin: state.minutes + mg.lvl.batchTimeMin,
+    yieldAmount: Math.max(1, Math.round(product.yieldPerBatch * mg.lvl.capacity * qualityFactor)),
+    auto: false,
+  };
+
+  const grade = normalizedScore >= 80 ? "Mükemmel" : normalizedScore >= 55 ? "İyi" : normalizedScore >= 30 ? "Vasat" : "Kötü";
+  toast("Üretim Tamamlandı", `${product.name} partisi başlatıldı. Performans: ${grade} (%${normalizedScore})`, normalizedScore >= 55 ? "positive" : "neutral");
+
+  state.activeProductionMinigame = null;
+  closeModal();
+  render();
+}
+
+// ---------------- MAHALLE ATAMA (Satıcı) ----------------
+function openNeighborhoodAssignModal(crewId) {
+  const crewMember = state.crew.find(c => c.id === crewId);
+  if (!crewMember) return;
+  const backdrop = document.getElementById("district-modal-backdrop");
+  const modal = document.getElementById("district-modal");
+
+  const owned = playerDistrictIds();
+  let html = `
+    <button class="close-x" id="close-assign-modal">×</button>
+    <div class="panel-title">${crewMember.name}</div>
+    <div class="panel-subtitle">Satış yapacağı mahalleyi seç. Sadece kontrolündeki bölgelerde atama yapılabilir.</div>
+  `;
+
+  if (owned.length === 0) {
+    html += `<div class="empty-state">Henüz kontrolünde bir bölge yok.</div>`;
+  } else {
+    owned.forEach(did => {
+      const d = districtById(did);
+      const neighborhoods = NEIGHBORHOODS[did] || [];
+      if (neighborhoods.length === 0) return;
+      html += `<div class="section-label">${d.name}</div>`;
+      neighborhoods.forEach(nName => {
+        const occupied = Object.values(state.neighborhoodAssignments).some(a => a.districtId === did && a.neighborhoodName === nName);
+        html += `
+          <div class="card-row" style="padding:8px 0;">
+            <span class="card-stat">${nName}</span>
+            <button class="btn btn-outline btn-sm" data-pick-neighborhood="${did}|${nName}" ${occupied ? "disabled" : ""}>${occupied ? "Dolu" : "Ata"}</button>
+          </div>
+        `;
+      });
+    });
+  }
+
+  modal.innerHTML = html;
+  document.getElementById("close-assign-modal").addEventListener("click", closeModal);
+  modal.querySelectorAll("[data-pick-neighborhood]").forEach(b => {
+    b.addEventListener("click", () => {
+      const [districtId, neighborhoodName] = b.dataset.pickNeighborhood.split("|");
+      state.neighborhoodAssignments[crewId] = { districtId, neighborhoodName };
+      toast("Atama Yapıldı", `${crewMember.name} artık ${neighborhoodName}'de satış yapıyor.`, "positive");
+      closeModal();
+      render();
+    });
+  });
+
+  backdrop.classList.add("open");
+}
+
+// Satıcı ve Dağıtım Amiri gelirini hesaplar (gameTick tarafından çağrılır)
+function processSalesIncome(minutesPassed) {
+  const hasBasSatici = state.crew.some(c => c.role === "bas_satici" && !c.assignedTo);
+  const basSaticiCut = 0.15;
+
+  // Her satıcının ürettiği ham gelir (birim zamanda sabit bir taban + rastgele dalgalanma)
+  const salesPerCrew = {}; // crewId -> gelir bu tick'te
+  state.crew.filter(c => c.role === "satici" && !c.assignedTo).forEach(c => {
+    const assignment = state.neighborhoodAssignments[c.id];
+    if (!assignment) return;
+    // Karizma ve İkna, taban satış gelirini artırır/azaltır (10 nötr taban, her puan ~%2 etki)
+    const karizma = c.attributes ? c.attributes.karizma : 10;
+    const ikna = c.attributes ? c.attributes.ikna : 10;
+    const attrMultiplier = 1 + ((karizma - 10) * 0.02) + ((ikna - 10) * 0.02);
+    const baseHourly = 260 * Math.max(0.5, attrMultiplier); // satıcı başına ortalama saatlik brüt satış geliri
+    const grossIncome = baseHourly * (minutesPassed / 60) * (0.7 + Math.random() * 0.6);
+    salesPerCrew[c.id] = { gross: grossIncome, districtId: assignment.districtId };
+  });
+
+  let totalOwnerIncome = 0;
+  let totalSaticiPrimIncome = 0; // satıcıların kendi primleri (bilgi amaçlı, maaşlarına ek değil, ayrı prim cebi)
+  let totalBasSaticiIncome = 0;
+
+  Object.keys(salesPerCrew).forEach(crewId => {
+    const { gross } = salesPerCrew[crewId];
+    const saticiPrim = gross * 0.15;
+    const afterSatici = gross - saticiPrim;
+    totalSaticiPrimIncome += saticiPrim;
+
+    if (hasBasSatici) {
+      const basSaticiPay = afterSatici * basSaticiCut;
+      totalBasSaticiIncome += basSaticiPay;
+      totalOwnerIncome += afterSatici - basSaticiPay;
+    } else {
+      totalOwnerIncome += afterSatici;
+    }
+  });
+
+  if (totalOwnerIncome > 0) {
+    state.cash += totalOwnerIncome * (state.modifiers.businessIncomeMult || 1);
+    trackDailyIncome(totalOwnerIncome * (state.modifiers.businessIncomeMult || 1), 0);
+  }
+}
+
+function trackDailyIncome(income, expense) {
+  const tracker = state.dailyIncomeTracker;
+  if (tracker.lastResetDay !== state.day) {
+    tracker.lastFullDayNet = tracker.incomeSoFar - tracker.expenseSoFar;
+    tracker.incomeSoFar = 0;
+    tracker.expenseSoFar = 0;
+    tracker.lastResetDay = state.day;
+  }
+  tracker.incomeSoFar += income;
+  tracker.expenseSoFar += expense;
+}
+
+// ---------------- CASUS İSTİHBARAT SİSTEMİ ----------------
+function runSpyIntelGeneration(minutesPassed) {
+  const spyCount = state.crew.filter(c => c.role === "casus" && !c.assignedTo).length;
+  if (spyCount === 0) return;
+  if (state.intelMarkers.length >= spyCount + 1) return;
+  if (Math.random() > 0.05 * spyCount * (minutesPassed / 5)) return;
+
+  // Rastgele bir rakip/polis aktivitesi hakkında erken bilgi üret
+  const candidates = [];
+  RIVAL_GANGS.forEach(g => {
+    const territories = rivalDistrictIds(g.id);
+    if (territories.length > 0) {
+      candidates.push({ districtId: territories[Math.floor(Math.random()*territories.length)], label: `${g.name} bir operasyon hazırlığında.` });
+    }
+  });
+  candidates.push({ districtId: POLICE_FACTION.hideoutDistrict, label: "Polis bölgede devriye artırmayı planlıyor." });
+  if (candidates.length === 0) return;
+
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  state.intelMarkers.push({
+    id: uid(), districtId: pick.districtId, description: pick.label,
+    expiresAtMin: state.minutes + 60 + Math.floor(Math.random()*60),
+  });
+}
+
+function showCrewAttributes(crewId) {
+  const c = state.crew.find(x => x.id === crewId);
+  if (!c || !c.attributes) return;
+  const backdrop = document.getElementById("district-modal-backdrop");
+  const modal = document.getElementById("district-modal");
+
+  const sorted = Object.entries(c.attributes).sort((a, b) => ATTRIBUTES[a[0]].name.localeCompare(ATTRIBUTES[b[0]].name, "tr"));
+  let html = `
+    <button class="close-x" id="close-attrs-modal">×</button>
+    <div class="panel-title">${c.name}</div>
+    <div class="panel-subtitle">${CREW_ROLES[c.role].name} — Özellikler (20 üzerinden)</div>
+  `;
+  sorted.forEach(([key, val]) => {
+    const pct = Math.round((val / 20) * 100);
+    html += `
+      <div class="card-row" style="margin-bottom:6px;">
+        <span class="card-stat" style="width:150px;">${ATTRIBUTES[key].name}</span>
+        <div class="progress-track" style="flex:1; margin:0 8px;"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <span class="card-stat gold"><span class="num">${val}</span></span>
+      </div>
+    `;
+  });
+  modal.innerHTML = html;
+  document.getElementById("close-attrs-modal").addEventListener("click", closeModal);
+  backdrop.classList.add("open");
 }
 
 function generateRecruitPool() {
@@ -1305,6 +1914,7 @@ function generateRecruitPool() {
       id: uid(), name: randomName(), role: roleId,
       loyalty: 40 + Math.floor(Math.random() * 50),
       wage: role.baseWage + Math.floor(Math.random() * 100),
+      attributes: generateAttributesForRole(roleId),
     };
   });
 }
@@ -1314,7 +1924,7 @@ function recruitCrew(recruitId) {
   const signingCost = r.wage * 10;
   if (state.cash < signingCost) { toast("Yetersiz Bakiye", "İşe alım maliyetini karşılayamıyorsun.", "negative"); return; }
   state.cash -= signingCost;
-  state.crew.push({ id: r.id, name: r.name, role: r.role, wage: r.wage, loyalty: r.loyalty, assignedTo: null });
+  state.crew.push({ id: r.id, name: r.name, role: r.role, wage: r.wage, loyalty: r.loyalty, attributes: r.attributes, assignedTo: null });
   state.recruitPool = state.recruitPool.filter(x => x.id !== recruitId);
   toast("Yeni Eleman", `${r.name} ekibine katıldı.`, "positive");
   render();
@@ -1385,8 +1995,280 @@ function renderEmpireTab() {
     });
   }
 
+  html += `<div class="section-label">Mahkumlar</div>`;
+  const activeCaptives = state.captives.filter(c => !c.resolved);
+  if (activeCaptives.length === 0) {
+    html += `<div class="empty-state">Elinde mahkum yok.</div>`;
+    html += `<button class="btn btn-outline btn-sm btn-full" id="spawn-test-captive">Test: Rastgele Mahkum Oluştur</button>`;
+  } else {
+    activeCaptives.forEach(c => {
+      const hpPct = Math.round((c.hp / c.maxHpAtCapture) * 100);
+      const threshold = Math.ceil(c.hp / 3);
+      const heldHours = Math.floor((c.heldMinutes || 0) / 60);
+      html += `
+        <div class="card">
+          <div class="card-row"><span class="card-title">${c.name}</span><span class="badge blood">${RIVAL_GANGS.find(g=>g.id===c.sourceGangId)?.name || "Bilinmeyen"}</span></div>
+          <div class="progress-track"><div class="progress-fill" style="width:${hpPct}%"></div></div>
+          <div class="card-stat">Can: <span class="num">${c.hp}</span> · Konuşma Eşiği: <span class="num">${threshold}</span></div>
+          <div class="card-stat blood">Tutulma Süresi: <span class="num">${heldHours}</span> saat — ne kadar uzun tutulursa hideout baskın riski o kadar artar</div>
+          <button class="btn btn-blood btn-sm btn-full" style="margin-top:8px;" data-interrogate="${c.id}">Sorgula</button>
+        </div>
+      `;
+    });
+  }
+
   el.innerHTML = html;
+  const spawnBtn = document.getElementById("spawn-test-captive");
+  if (spawnBtn) spawnBtn.addEventListener("click", spawnTestCaptive);
+  el.querySelectorAll("[data-interrogate]").forEach(b => b.addEventListener("click", () => openInterrogationScreen(b.dataset.interrogate)));
   el.querySelectorAll("[data-hideout-raid]").forEach(b => b.addEventListener("click", () => openHideoutRaidPlanner(b.dataset.hideoutRaid)));
+}
+
+// ---------------- MAHKUM / SORGU SİSTEMİ ----------------
+function spawnTestCaptive() {
+  const gang = RIVAL_GANGS[Math.floor(Math.random() * RIVAL_GANGS.length)];
+  const hp = 20 + Math.floor(Math.random() * 60); // combat'tan gelen "kalan can" simülasyonu (test amaçlı)
+  const roles = Object.keys(CREW_ROLES);
+  const randomRole = roles[Math.floor(Math.random() * roles.length)];
+  state.captives.push({
+    id: uid(), name: randomName(), sourceGangId: gang.id,
+    hp, maxHpAtCapture: hp, loyalty: 30 + Math.floor(Math.random() * 50),
+    lastHealAtMin: state.minutes, resolved: false,
+    attributes: generateAttributesForRole(randomRole),
+  });
+  toast("Mahkum Ele Geçirildi", "Test amaçlı bir mahkum oluşturuldu.", "neutral");
+  render();
+}
+
+// Mahkumun pasif iyileşmesini işler (gameTick tarafından çağrılır)
+function processCaptiveHealing(minutesPassed) {
+  state.captives.forEach(c => {
+    if (c.resolved) return;
+    const elapsed = state.minutes - c.lastHealAtMin;
+    const healInterval = INTERROGATION_HEAL_MIN_MINUTES + Math.random() * (INTERROGATION_HEAL_MAX_MINUTES - INTERROGATION_HEAL_MIN_MINUTES);
+    if (elapsed >= healInterval) {
+      c.hp += 1;
+      c.lastHealAtMin = state.minutes;
+    }
+  });
+  processCaptiveRaidRisk(minutesPassed);
+}
+
+// Mahkum ne kadar uzun tutulursa, rakip çetenin hideout'a baskın düzenleyip onu
+// kurtarma ihtimali o kadar birikir. En yüksek Gizlilik'e sahip ekip üyesi bu riski azaltır.
+function processCaptiveRaidRisk(minutesPassed) {
+  const activeCaptives = state.captives.filter(c => !c.resolved);
+  if (activeCaptives.length === 0) return;
+
+  const bestSecrecy = state.crew.reduce((max, c) => {
+    const gizlilik = c.attributes ? c.attributes.gizlilik : 8;
+    return Math.max(max, gizlilik);
+  }, 8);
+  const secrecyReduction = Math.max(0.3, 1 - (bestSecrecy - 8) * 0.04); // 8 nötr taban, üstü riski azaltır
+
+  activeCaptives.forEach(c => {
+    c.heldMinutes = (c.heldMinutes || 0) + minutesPassed;
+    // Baz risk: her geçen dakika için çok küçük bir birikimli şans (saatte ~%1.5 taban)
+    const raidChancePerTick = (minutesPassed / 60) * 1.5 * secrecyReduction;
+    if (Math.random() * 100 < raidChancePerTick) {
+      c.resolved = true;
+      c.escaped = true;
+      const gang = RIVAL_GANGS.find(g => g.id === c.sourceGangId);
+      toast("Mahkum Kurtarıldı!", `${gang ? gang.name : "Rakip çete"} hideout'a baskın yapıp ${c.name}'i kurtardı.`, "negative");
+      logEvent(`${c.name}, rakip çete tarafından hideout baskınıyla kurtarıldı.`);
+      state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 10);
+    }
+  });
+}
+
+function openInterrogationScreen(captiveId) {
+  const captive = state.captives.find(c => c.id === captiveId);
+  if (!captive) return;
+  const backdrop = document.getElementById("district-modal-backdrop");
+  const modal = document.getElementById("district-modal");
+
+  const threshold = Math.ceil(captive.hp / 3);
+
+  let html = `
+    <button class="close-x" id="close-interrogation-modal">×</button>
+    <div class="panel-title">${captive.name}</div>
+    <div class="panel-subtitle">${RIVAL_GANGS.find(g => g.id === captive.sourceGangId)?.name || "Bilinmeyen"} — Sorgu</div>
+    <div class="card">
+      <div class="card-stat">Mevcut Can: <span class="num">${captive.hp}</span></div>
+      <div class="card-stat blood">Konuşma Eşiği: <span class="num">${threshold}</span> (bu değerin altına düşerse bilgi verir)</div>
+    </div>
+    <div class="section-label">İşkence Yöntemi Seç</div>
+  `;
+
+  INTERROGATION_LEVELS.forEach(lvl => {
+    html += `
+      <div class="card">
+        <div class="card-title">${lvl.name}</div>
+        <div class="card-desc">${lvl.description}</div>
+        <div class="card-stat blood">Can Kaybı: <span class="num">${lvl.damageMin}-${lvl.damageMax}</span></div>
+        <button class="btn btn-blood btn-sm btn-full" style="margin-top:8px;" data-interrogate-level="${lvl.id}">Uygula</button>
+      </div>
+    `;
+  });
+
+  html += `<div class="section-label">Diğer Seçenekler</div>`;
+  html += `
+    <div class="card">
+      <div class="card-desc">Mahkumu bırakıp beklet, canı zamanla kendiliğinden yükselir (daha güvenli sorgu için tampon büyür, ama bu süre boyunca hideout'un baskın riski taşır).</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Kendi Tarafına Çekmeyi Dene</div>
+      <div class="card-desc">İşkence yerine ikna/vaat yoluyla mahkumu kendi ekibine katmayı dene. Sadakati düşükse ve az işkence görmüşse başarı ihtimali yüksek olur. Başarısız olursa mahkum artık hiçbir şekilde konuşmaz.</div>
+      <div class="card-stat">Mahkum Sadakati: <span class="num">${captive.loyalty}</span> · İşkence Sayısı: <span class="num">${captive.tortureCount || 0}</span></div>
+      <button class="btn btn-outline btn-sm btn-full" style="margin-top:8px;" id="try-turn-captive">Çevirmeyi Dene</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Fidye İste</div>
+      <div class="card-desc">Mahkumu canlı teslim etmek karşılığında rakip çeteden fidye talep et. ${(captive.tortureCount || 0) > 0 ? '<span class="blood">Sorgu görmüş bir mahkumun fidye değeri düşer.</span>' : ''}</div>
+      <div class="card-stat gold">Tahmini Fidye: <span class="num">${fmt(estimateRansomValue(captive))}</span></div>
+      <button class="btn btn-gold btn-sm btn-full" style="margin-top:8px;" id="request-ransom">Fidye İste</button>
+    </div>
+  `;
+
+  modal.innerHTML = html;
+  document.getElementById("close-interrogation-modal").addEventListener("click", closeModal);
+  modal.querySelectorAll("[data-interrogate-level]").forEach(b => {
+    b.addEventListener("click", () => applyInterrogation(captive.id, b.dataset.interrogateLevel));
+  });
+  const turnBtn = document.getElementById("try-turn-captive");
+  if (turnBtn) turnBtn.addEventListener("click", () => tryTurnCaptive(captive.id));
+  const ransomBtn = document.getElementById("request-ransom");
+  if (ransomBtn) ransomBtn.addEventListener("click", () => requestRansom(captive.id));
+
+  backdrop.classList.add("open");
+}
+
+// Fidye değeri: rakip çetenin nakdine oranlı taban, sorgu görmüşse düşer,
+// ekipte Pazarlık yeteneği yüksek biri varsa artar.
+function estimateRansomValue(captive) {
+  const gang = RIVAL_GANGS.find(g => g.id === captive.sourceGangId);
+  const gangCash = gang && state.gangEconomy[gang.id] ? state.gangEconomy[gang.id].cash : 40000;
+  let value = gangCash * 0.25;
+
+  // Sorgu görmüşse (her işkence turu) değer ciddi düşer
+  const tortureCount = captive.tortureCount || 0;
+  value *= Math.max(0.2, 1 - tortureCount * 0.25);
+
+  // En yüksek Pazarlık yeteneğine sahip boştaki ekip üyesi müzakereyi güçlendirir
+  const negotiator = state.crew.filter(c => !c.assignedTo).sort((a, b) => {
+    const aPaz = a.attributes ? a.attributes.pazarlik : 8;
+    const bPaz = b.attributes ? b.attributes.pazarlik : 8;
+    return bPaz - aPaz;
+  })[0];
+  const negotiatorPazarlik = negotiator && negotiator.attributes ? negotiator.attributes.pazarlik : 8;
+  value *= 1 + ((negotiatorPazarlik - 8) * 0.03);
+
+  return Math.round(Math.max(1000, value));
+}
+
+function requestRansom(captiveId) {
+  const captive = state.captives.find(c => c.id === captiveId);
+  if (!captive) return;
+  const value = estimateRansomValue(captive);
+  const gang = RIVAL_GANGS.find(g => g.id === captive.sourceGangId);
+
+  // Rakip çete kabul etme ihtimali: nakdi yeterliyse ve mahkum onlar için hâlâ değerliyse yüksektir
+  const gangCash = gang && state.gangEconomy[gang.id] ? state.gangEconomy[gang.id].cash : 40000;
+  const acceptChance = gangCash >= value ? 75 : 35;
+  const accepted = Math.random() * 100 < acceptChance;
+
+  captive.resolved = true;
+  if (accepted) {
+    if (gang && state.gangEconomy[gang.id]) state.gangEconomy[gang.id].cash -= value;
+    state.cash += value;
+    toast("Fidye Ödendi", `${gang ? gang.name : "Rakip çete"} fidyeyi ödedi: ${fmt(value)}.`, "positive");
+    logEvent(`${captive.name} için fidye alındı: ${fmt(value)}.`);
+  } else {
+    toast("Fidye Reddedildi", `${gang ? gang.name : "Rakip çete"} fidyeyi ödemedi. Mahkum serbest bırakıldı.`, "negative");
+    logEvent(`${captive.name} için fidye talebi reddedildi.`);
+  }
+
+  closeModal();
+  render();
+}
+
+function applyInterrogation(captiveId, levelId) {
+  const captive = state.captives.find(c => c.id === captiveId);
+  const level = INTERROGATION_LEVELS.find(l => l.id === levelId);
+  if (!captive || !level) return;
+
+  captive.tortureCount = (captive.tortureCount || 0) + 1;
+  const damage = level.damageMin + Math.floor(Math.random() * (level.damageMax - level.damageMin + 1));
+  const thresholdBefore = Math.ceil(captive.hp / 3);
+  captive.hp -= damage;
+
+  if (captive.hp <= 0) {
+    captive.hp = 0;
+    captive.resolved = true;
+    toast("Mahkum Öldü", `${captive.name} işkence sırasında öldü. Bilgi alınamadı.`, "negative");
+    closeModal();
+    render();
+    return;
+  }
+
+  if (captive.hp <= thresholdBefore) {
+    captive.resolved = true;
+    const gang = RIVAL_GANGS.find(g => g.id === captive.sourceGangId);
+    // İstihbarat ödülü: rakip çetenin nakdinden bir kısmını "öğrenip" avantaja çeviriyoruz (basitleştirilmiş ödül)
+    const intelValue = gang && state.gangEconomy[gang.id] ? Math.round(state.gangEconomy[gang.id].cash * 0.15) : 5000;
+    state.cash += intelValue;
+    toast("Mahkum Konuştu", `${captive.name} bilgi verdi. İstihbarat değeri: ${fmt(intelValue)}.`, "positive");
+    logEvent(`${captive.name} sorgu sonucu konuştu.`);
+    closeModal();
+    render();
+    return;
+  }
+
+  toast("Sorgu Devam Ediyor", `${captive.name} henüz konuşmadı. Can: ${captive.hp}.`, "neutral");
+  closeModal();
+  render();
+}
+
+function tryTurnCaptive(captiveId) {
+  const captive = state.captives.find(c => c.id === captiveId);
+  if (!captive) return;
+
+  // Çevirmeyi deneyen kişi olarak, boştaki ekipten en yüksek İkna'ya sahip olanı kullanırız.
+  const negotiator = state.crew.filter(c => !c.assignedTo).sort((a, b) => {
+    const aIkna = a.attributes ? a.attributes.ikna : 8;
+    const bIkna = b.attributes ? b.attributes.ikna : 8;
+    return bIkna - aIkna;
+  })[0];
+  const negotiatorIkna = negotiator && negotiator.attributes ? negotiator.attributes.ikna : 8; // ekip yoksa nötr taban
+  const captiveResistance = captive.attributes ? captive.attributes.sadakat_direnci : 10;
+
+  // Başarı şansı: düşük sadakat kolaylaştırır, her işkence turu zorlaştırır,
+  // negotiator'ın İkna'sı yardımcı olur, mahkumun Sadakat Direnci zorlaştırır.
+  let chance = 70 - captive.loyalty * 0.5 - (captive.tortureCount || 0) * 15;
+  chance += (negotiatorIkna - 10) * 1.5; // 10 nötr taban, üstü bonus, altı ceza
+  chance -= (captiveResistance - 10) * 1.5;
+  chance = Math.max(5, Math.min(85, chance));
+
+  const success = Math.random() * 100 < chance;
+
+  if (success) {
+    captive.resolved = true;
+    state.crew.push({
+      id: uid(), name: captive.name, role: "satici", // varsayılan olarak düşük riskli bir role başlar
+      wage: 220, loyalty: Math.max(10, captive.loyalty - 30), // yeni katıldığı için sadakati düşük başlar
+      attributes: generateAttributesForRole("satici"),
+      assignedTo: null,
+    });
+    toast("Çevirme Başarılı", `${captive.name} artık senin örgütünde.`, "positive");
+    logEvent(`${captive.name} kendi tarafımıza çekildi.`);
+  } else {
+    captive.resolved = true;
+    toast("Çevirme Başarısız", `${captive.name} ikna olmadı. Bir daha konuşturulamaz.`, "negative");
+    logEvent(`${captive.name} çevirme girişimi başarısız oldu.`);
+  }
+
+  closeModal();
+  render();
 }
 
 function openHideoutRaidPlanner(gangId) {
@@ -1443,6 +2325,7 @@ function openHideoutRaidPlanner(gangId) {
       const c = state.crew.find(x => x.id === cid);
       c.assignedTo = "hideoutraid:" + gangId;
       successChance += Math.round(c.loyalty / 20);
+      if (c.role === "surucu") successChance += 8;
     });
     successChance = Math.min(85, successChance);
 
@@ -1488,6 +2371,7 @@ function render() {
     case "drugs": renderDrugsTab(); break;
     case "heist": renderHeistTab(); break;
     case "armory": renderArmoryTab(); break;
+    case "garage": renderGarageTab(); break;
     case "crew": renderCrewTab(); break;
     case "empire": renderEmpireTab(); break;
   }
@@ -1520,12 +2404,17 @@ function gameTick() {
     }
   });
   state.cash += hourlyIncome * (minutesPassed / 60);
+  trackDailyIncome(hourlyIncome * (minutesPassed / 60), 0);
   const heatResistanceReduction = state.modifiers.heatResistanceMult ? (1 / state.modifiers.heatResistanceMult) : 1;
   state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + hourlyHeat * heatResistanceReduction * (minutesPassed / 60));
+
+  // Satıcı / Dağıtım Amiri geliri
+  processSalesIncome(minutesPassed);
 
   // Ekip maaşları (saatlik)
   const totalWages = state.crew.reduce((s, c) => s + c.wage, 0) * (state.modifiers.wageMult || 1);
   state.cash -= totalWages * (minutesPassed / 60);
+  trackDailyIncome(0, totalWages * (minutesPassed / 60));
 
   // Ekip sadakati zamanla doğal düşer (modifier ile yavaşlatılabilir)
   const loyaltyDecay = 0.02 * (state.modifiers.loyaltyDecayMult || 1) * (minutesPassed / 60);
@@ -1538,17 +2427,49 @@ function gameTick() {
   state.vehicles.forEach(v => {
     if (v.status !== "transit") return;
 
-    // Kaçakçılık araçları için yol üstünde yakalanma riski (ısıya bağlı)
+    // Kaçakçılık araçları için yol üstünde yakalanma riski (ısıya bağlı + araç plaka durumuna bağlı)
     if (v.faction === "player" && v.kind === "weapon_smuggle" && !v.riskChecked) {
       const midPoint = v.departedAtMin + (v.totalTravelMin / 2);
       if (state.minutes >= midPoint) {
         v.riskChecked = true;
-        const catchChance = Math.min(35, state.heat * 0.4);
+        let catchChance = Math.min(35, state.heat * 0.4);
+        // Mimlenmiş plakayla sürülen araç: yakalanma şansı çok ciddi artar (polis bu plakayı tanıyor)
+        if (v.garageVehicleId) {
+          const gv = state.garage.find(g => g.id === v.garageVehicleId);
+          if (gv && gv.flagged) {
+            catchChance = Math.min(90, catchChance + 45);
+          } else if (gv && gv.replatedRecently) {
+            // Yeni değiştirilmiş plaka: normalden biraz daha yüksek risk (henüz "temiz" güven oluşmadı)
+            catchChance = Math.min(60, catchChance + 10);
+          }
+        }
         if (Math.random() * 100 < catchChance) {
           v.status = "caught";
           state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 15);
-          toast("Sevkiyat Yakalandı!", `Kaçakçılık aracın polis tarafından durduruldu. Yük ve para kayıp.`, "negative");
+          const hasMechanic = state.crew.some(c => c.role === "tamirci" && !c.assignedTo);
+          if (hasMechanic && Math.random() < 0.5) {
+            const recovered = Math.max(1, Math.round(v.amount * 0.4));
+            state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + recovered;
+            toast("Sevkiyat Yakalandı — Kısmen Kurtarıldı", `Tamirci sayesinde ${recovered} adet ekipman kurtarıldı.`, "neutral");
+          } else {
+            toast("Sevkiyat Yakalandı!", `Kaçakçılık aracın polis tarafından durduruldu. Yük ve para kayıp.`, "negative");
+          }
           logEvent("Kaçakçılık sevkiyatı polis tarafından yakalandı.");
+          // Eğer filodan bir araç kullanılıyorduysa, kaçakçılıkta yakalanma aracı da ciddi hasar verir
+          // ve polis tarafından tespit edildiği için plakası "mimlenir" (satış değeri düşer, gelecekte yakalanma riski artar).
+          if (v.garageVehicleId) {
+            const gv = state.garage.find(g => g.id === v.garageVehicleId);
+            if (gv) {
+              const def = VEHICLES.find(x => x.id === gv.vehicleTypeId);
+              gv.durability = Math.max(0, gv.durability - Math.round(def.maxDurability * 0.5));
+              gv.status = "available";
+              gv.currentDistrictId = v.fromId;
+              gv.flagged = true;
+              gv.replatedRecently = false;
+              if (gv.durability <= 0) toast("Araç Hasar Gördü", `${def.name} ağır hasar aldı, kullanılamaz durumda.`, "negative");
+              toast("Araç Mimlendi", `${def.name} (${gv.plate}) polis kayıtlarına girdi. Bu araçla risk artık çok daha yüksek.`, "negative");
+            }
+          }
         }
       }
     }
@@ -1559,11 +2480,19 @@ function gameTick() {
     if (v.faction === "player" && v.kind === "shipment") {
       state.materialStock[v.material] += v.amount;
       logEvent(`Sevkiyat ulaştı: ${districtById(v.toId).name}'e ${v.amount} birim malzeme.`);
+      if (v.garageVehicleId) {
+        const gv = state.garage.find(g => g.id === v.garageVehicleId);
+        if (gv) { gv.status = "available"; gv.currentDistrictId = v.toId; }
+      }
     } else if (v.faction === "player" && v.kind === "weapon_smuggle") {
       state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + v.amount;
       const item = findArmoryItem(v.itemType, v.itemId);
       logEvent(`Kaçak sevkiyat ulaştı: ${item.name} x${v.amount}.`);
       toast("Kaçakçılık Başarılı", `${item.name} envanterine eklendi.`, "positive");
+      if (v.garageVehicleId) {
+        const gv = state.garage.find(g => g.id === v.garageVehicleId);
+        if (gv) { gv.status = "available"; gv.currentDistrictId = v.toId; }
+      }
     } else if (v.faction !== "player" && v.kind === "shipment") {
       // Rakip çete nakliyesi hedefe ulaştı -> stoğuna ekle
       const econ = state.gangEconomy[v.faction];
@@ -1581,6 +2510,12 @@ function gameTick() {
   // --- Rakip çete AI ekonomisi & operasyonları ---
   runRivalGangAI(minutesPassed);
   runPoliceAI(minutesPassed);
+  runSpyIntelGeneration(minutesPassed);
+  state.intelMarkers = state.intelMarkers.filter(m => state.minutes < m.expiresAtMin);
+
+  // Yaralanma iyileşme kontrolü (Doktor mekaniği)
+  processInjuryHealing();
+  processCaptiveHealing(minutesPassed);
 
   // Karaborsa ilanları: yeni ilan üretimi ve süresi dolanların temizlenmesi
   maybeSpawnBlackMarketListing();
@@ -1801,7 +2736,7 @@ document.getElementById("start-btn").addEventListener("click", startGame);
 // ---------------- SETUP WIZARD ----------------
 const setupWizard = {
   stepIndex: 0,
-  steps: ["identity", "origin", "leadership", "orgname", "ideology", "summary"],
+  steps: ["identity", "origin", "leadership", "orgname", "ideology", "difficulty", "summary"],
 };
 
 function runSetupWizard() {
@@ -1831,7 +2766,7 @@ function renderSetupStep() {
 
   if (step === "identity") {
     content.innerHTML = `
-      <div class="setup-eyebrow">Adım 1 / 6</div>
+      <div class="setup-eyebrow">Adım 1 / 7</div>
       <div class="setup-title">Kimliğin</div>
       <div class="setup-desc">Bu şehirde herkesin bildiği bir isim, bir de kimsenin bilmediği bir kod adı olur.</div>
       <label class="setup-label">Gerçek İsim</label>
@@ -1856,7 +2791,7 @@ function renderSetupStep() {
 
   if (step === "origin") {
     content.innerHTML = `
-      <div class="setup-eyebrow">Adım 2 / 6</div>
+      <div class="setup-eyebrow">Adım 2 / 7</div>
       <div class="setup-title">Geçmişin</div>
       <div class="setup-desc">Bu işe nasıl bulaştın? Geçmişin, bugün elinde ne olduğunu belirler.</div>
       <div id="origin-options"></div>
@@ -1890,7 +2825,7 @@ function renderSetupStep() {
 
   if (step === "leadership") {
     content.innerHTML = `
-      <div class="setup-eyebrow">Adım 3 / 6</div>
+      <div class="setup-eyebrow">Adım 3 / 7</div>
       <div class="setup-title">Liderlik Tarzın</div>
       <div class="setup-desc">Adamların seni nasıl tanıyacak? Bu, sokakta nasıl hareket ettiğini belirler.</div>
       <div id="leadership-options"></div>
@@ -1924,7 +2859,7 @@ function renderSetupStep() {
 
   if (step === "orgname") {
     content.innerHTML = `
-      <div class="setup-eyebrow">Adım 4 / 6</div>
+      <div class="setup-eyebrow">Adım 4 / 7</div>
       <div class="setup-title">Örgütünün Adı</div>
       <div class="setup-desc">Sokakta fısıldanacak, polis dosyalarında geçecek isim.</div>
       <label class="setup-label">Örgüt İsmi</label>
@@ -1946,7 +2881,7 @@ function renderSetupStep() {
 
   if (step === "ideology") {
     content.innerHTML = `
-      <div class="setup-eyebrow">Adım 5 / 6</div>
+      <div class="setup-eyebrow">Adım 5 / 7</div>
       <div class="setup-title">İdeolojin</div>
       <div class="setup-desc">Örgütünün neye inandığı, nasıl büyüdüğünü belirler.</div>
       <div id="ideology-options"></div>
@@ -1979,18 +2914,55 @@ function renderSetupStep() {
     return;
   }
 
+  if (step === "difficulty") {
+    content.innerHTML = `
+      <div class="setup-eyebrow">Adım 6 / 7</div>
+      <div class="setup-title">Zorluk Seviyesi</div>
+      <div class="setup-desc">Bu seçim ekonomini (gelir/gider) ve karşılaşacağın rakiplerin/operasyonların zorluğunu belirler.</div>
+      <div id="difficulty-options"></div>
+      <div class="setup-nav">
+        <button class="btn btn-outline" id="setup-back">Geri</button>
+        <button class="btn btn-gold" id="setup-next">Devam Et</button>
+      </div>
+    `;
+    const optionsEl = document.getElementById("difficulty-options");
+    DIFFICULTY_LEVELS.forEach(d => {
+      const card = document.createElement("div");
+      card.className = "option-card" + (state.profile.difficultyId === d.id ? " selected" : "");
+      card.innerHTML = `
+        <div class="option-title">${d.name}<span class="check">✓</span></div>
+        <div class="option-desc">${d.description}</div>
+        <div class="option-buff">✦ Gelir x${d.incomeMult} · Gider x${d.expenseMult}</div>
+        <div class="option-buff">✦ Rakip Gücü x${d.rivalStrengthMult} · Operasyon Başarısı ${d.operationSuccessBonus >= 0 ? '+' : ''}${d.operationSuccessBonus}</div>
+      `;
+      card.addEventListener("click", () => {
+        state.profile.difficultyId = d.id;
+        renderSetupStep();
+      });
+      optionsEl.appendChild(card);
+    });
+    document.getElementById("setup-back").addEventListener("click", () => goToStep(-1));
+    document.getElementById("setup-next").addEventListener("click", () => {
+      if (!state.profile.difficultyId) { toast("Seçim Gerekli", "Bir zorluk seviyesi seç.", "negative"); return; }
+      goToStep(1);
+    });
+    return;
+  }
+
   if (step === "summary") {
     const origin = ORIGINS.find(o => o.id === state.profile.originId);
     const leadership = LEADERSHIP_STYLES.find(l => l.id === state.profile.leadershipId);
     const ideology = IDEOLOGIES.find(i => i.id === state.profile.ideologyId);
+    const difficulty = DIFFICULTY_LEVELS.find(d => d.id === state.profile.difficultyId);
     content.innerHTML = `
-      <div class="setup-eyebrow">Adım 6 / 6</div>
+      <div class="setup-eyebrow">Adım 7 / 7</div>
       <div class="setup-title">${state.profile.orgName}</div>
       <div class="setup-desc">${state.profile.codeName} olarak da bilinen ${state.profile.leaderName}, İstanbul'un gölgelerinde imparatorluğunu kurmaya hazır.</div>
       <div class="card">
         <div class="setup-summary-row"><span class="label">Geçmiş</span><span class="value">${origin.name}</span></div>
         <div class="setup-summary-row"><span class="label">Liderlik</span><span class="value">${leadership.name}</span></div>
         <div class="setup-summary-row"><span class="label">İdeoloji</span><span class="value">${ideology.name}</span></div>
+        <div class="setup-summary-row"><span class="label">Zorluk</span><span class="value">${difficulty.name}</span></div>
       </div>
       <div class="setup-nav">
         <button class="btn btn-outline" id="setup-back">Geri</button>

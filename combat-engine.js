@@ -14,6 +14,7 @@ const cbState = {
   pendingAction: null, // 'move' | 'fire' | null
   phase: "placement", // 'placement' | 'combat' | 'aftermath' - ambush senaryosunda çok aşamalı akış
   victoryResult: null, // 'player' | 'enemy' - savaş bitince belirlenir
+  pendingBreaches: [], // { x, y, detonateAtRound, placedBy } - gecikmeli breach charge'lar
   log: [],
 };
 
@@ -24,6 +25,17 @@ async function cbLoadMap(url) {
   cbState.grid = data.grid;
   cbState.rows = data.rows;
   cbState.cols = data.cols;
+}
+
+// Görsel dosyaya bağımlı olmadan, anlık kod ile harita üretir ve state'e yükler.
+function cbLoadProceduralMap(mapType, size) {
+  const data = cbGenerateMap(mapType, size || 20);
+  cbState.grid = data.grid;
+  cbState.rows = data.rows;
+  cbState.cols = data.cols;
+  cbState.mapEntrance = data.entrance;
+  cbState.mapRooms = data.rooms || null; // sadece hideout için dolu, alley'de null
+  cbState.mapType = mapType;
 }
 
 function cbTileAt(x, y) {
@@ -60,6 +72,48 @@ function cbFindRandomFloorTile(minDistFromPlayers) {
 // önce oyuncudan uzak bir "merkez" nokta bulur, sonra BFS ile o merkeze yakın
 // count kadar boş floor karesi toplar. Pusuya uğrayan taraf dağınık değil,
 // gerçekçi bir grup halinde durur.
+// Verilen bir kare havuzundan (örn. tek bir odanın floor kareleri), birbirine
+// yakın (BFS ile bağlı) count kadar kareyi seçer. Havuz dışına çıkmaz.
+function cbPickClusteredFromPool(pool, count) {
+  if (pool.length === 0) return [];
+  const poolSet = new Set(pool.map(p => `${p.x},${p.y}`));
+  const start = pool[Math.floor(Math.random() * pool.length)];
+
+  const visited = new Set([`${start.x},${start.y}`]);
+  const queue = [start];
+  const cluster = [start];
+
+  while (queue.length > 0 && cluster.length < count) {
+    const curr = queue.shift();
+    const neighbors = [
+      { x: curr.x + 1, y: curr.y }, { x: curr.x - 1, y: curr.y },
+      { x: curr.x, y: curr.y + 1 }, { x: curr.x, y: curr.y - 1 },
+    ];
+    neighbors.sort(() => Math.random() - 0.5);
+    neighbors.forEach(n => {
+      const key = `${n.x},${n.y}`;
+      if (visited.has(key)) return;
+      if (!poolSet.has(key)) return; // havuzun dışına çıkma
+      visited.add(key);
+      cluster.push(n);
+      queue.push(n);
+    });
+  }
+
+  // Küme havuz içinde yeterince büyüyemediyse, havuzdan rastgele tamamla
+  let attempts = 0;
+  while (cluster.length < count && attempts < 100) {
+    attempts++;
+    const candidate = pool[Math.floor(Math.random() * pool.length)];
+    const key = `${candidate.x},${candidate.y}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    cluster.push(candidate);
+  }
+
+  return cluster.slice(0, count);
+}
+
 function cbFindClusteredFloorTiles(count, minDistFromPlayers) {
   const center = cbFindRandomFloorTile(minDistFromPlayers);
   if (!center) return [];
@@ -89,7 +143,10 @@ function cbFindClusteredFloorTiles(count, minDistFromPlayers) {
 
   // Eğer küme yeterince büyüyemediyse (dar bir köşeye sıkıştıysa), eksik kalan
   // kadarını haritanın başka bir yerinden rastgele tamamla (garanti yerleşim için).
-  while (cluster.length < count) {
+  // Sonsuz döngüyü önlemek için deneme sayısı sınırlanır.
+  let attempts = 0;
+  while (cluster.length < count && attempts < 200) {
+    attempts++;
     const fallback = cbFindRandomFloorTile(minDistFromPlayers);
     if (!fallback) break;
     const key = `${fallback.x},${fallback.y}`;
@@ -215,23 +272,30 @@ function cbTurnInPlace(unit, newDir) {
 
 // ---------------- SİPER (OTOMATİK) ----------------
 function cbCoverBonusAgainst(defender, attacker) {
-  const dx = Math.sign(attacker.x - defender.x);
-  const dy = Math.sign(attacker.y - defender.y);
-  const checkX = defender.x + dx;
-  const checkY = defender.y + dy;
+  // Saldırganın defender'a göre BASKIN yönünü bul (yatay mı dikey mi daha büyük fark var).
+  // Böylece çapraz durumlarda köşe kontrolü yerine gerçek saldırı hattına bakılır.
+  const rawDx = attacker.x - defender.x;
+  const rawDy = attacker.y - defender.y;
+  let checkX = defender.x, checkY = defender.y;
+  if (Math.abs(rawDx) >= Math.abs(rawDy)) {
+    checkX = defender.x + Math.sign(rawDx);
+  } else {
+    checkY = defender.y + Math.sign(rawDy);
+  }
   const tile = cbTileAt(checkX, checkY);
 
   // Manuel "Siper Al" aktifse: sadece siperin durduğu yön korunur, ağır ceza.
   // Diğer yönlerden gelen saldırılar ise karakteri normalden daha savunmasız bırakır (bonus isabet, negatif "ceza").
   if (defender.takingCover) {
     const isCoveredTile = (tile === "obstacle" || tile === "wall");
-    if (isCoveredTile) return 0.6; // siperin olduğu yönden gelen ateşe ağır isabet düşüşü
-    return -0.2; // siperin olmadığı yönden gelen ateşe karşı ekstra savunmasız (isabet artışı)
+    if (isCoveredTile) return 0.55; // siperin olduğu yönden gelen ateşe ağır isabet düşüşü
+    return -0.15; // siperin olmadığı yönden gelen ateşe karşı ekstra savunmasız (isabet artışı)
   }
 
-  // Otomatik/pasif siper (siper alma aktif değilken de az miktarda geçerli)
-  if (tile === "obstacle") return 0.25;
-  if (tile === "wall") return 0.4;
+  // Otomatik/pasif siper: çok hafif bir taktik avantaj, ceza değil.
+  // Asıl anlamlı koruma manuel "Siper Al" aksiyonundan gelir.
+  if (tile === "obstacle") return 0.04;
+  if (tile === "wall") return 0.06;
   return 0;
 }
 
@@ -264,7 +328,16 @@ function cbCalculateHitChance(attacker, defender, bodyPart) {
   const distRatio = dist / weapon.range;
   if (distRatio > 0.5) chance -= (distRatio - 0.5) * 40;
 
-  chance += (attacker.aimSkill || 0);
+  // Silaha özel kabiliyet attribute'u (10 nötr taban, her puan ~%1.5 isabet etkisi).
+  // unit.attributes yoksa (eski test verisi/aimSkill uyumluluğu için) eski aimSkill alanına düşer.
+  let skillBonus;
+  if (attacker.attributes && weapon.attributeKey) {
+    const skill = attacker.attributes[weapon.attributeKey];
+    skillBonus = (skill - 10) * 1.5;
+  } else {
+    skillBonus = attacker.aimSkill || 0;
+  }
+  chance += skillBonus;
 
   const attackerArmInjury = (attacker.injuries || []).find(i => i.bodyPart === "kol" && !i.healed);
   if (attackerArmInjury) {
@@ -302,6 +375,15 @@ function cbFire(attacker, defender, bodyPart) {
   const part = CB_BODY_PARTS[bodyPart];
   let damage = Math.round(weapon.damage * part.damageMult * (0.85 + Math.random() * 0.3));
 
+  // Zırh: sadece göğüs/karın vuruşlarında geçerli, düz hasar azaltma (armor point)
+  if ((bodyPart === "gogus" || bodyPart === "karin") && defender.armorQuality) {
+    const armor = CB_ARMOR_QUALITY[defender.armorQuality];
+    if (armor) {
+      damage = Math.max(1, damage - armor.armorPoints * 0.15); // armor point'in bir kısmı düz hasar azaltımı olarak uygulanır
+      damage = Math.round(damage);
+    }
+  }
+
   let instantLethal = false;
   if (bodyPart === "bas" && Math.random() < part.lethalChance) instantLethal = true;
   if (bodyPart === "gogus" && Math.random() < (part.organHitChance || 0) * part.lethalChance) instantLethal = true;
@@ -324,6 +406,137 @@ function cbFire(attacker, defender, bodyPart) {
 
   cbLog(`${defender.name} vuruldu (${part.label}).`);
   return { success: true, hit: true, damage };
+}
+
+// ---------------- MAKİNELİ TÜFEK: NORMAL ATIŞ (5 ayrı deneme) ----------------
+// Her mermi kendi isabet/hasar hesabıyla ayrı ayrı işlenir. Hedef ölür/bayılırsa
+// kalan mermiler boşa harcanmaz, atış dizisi orada durur.
+function cbFireBurst(attacker, defender, bodyPart) {
+  const weapon = CB_WEAPONS[attacker.weapon];
+  const shotCount = weapon.burstShotCount || 1;
+  const results = [];
+
+  attacker.actionsLeft.act = false;
+
+  for (let i = 0; i < shotCount; i++) {
+    if (attacker.magAmmo <= 0) break;
+    if (defender.status === "dead" || defender.status === "down") break;
+
+    attacker.magAmmo -= 1;
+    const hitChance = cbCalculateHitChance(attacker, defender, bodyPart);
+    const roll = Math.random() * 100;
+    const hit = roll < hitChance;
+
+    if (!hit) {
+      results.push({ hit: false });
+      continue;
+    }
+
+    const part = CB_BODY_PARTS[bodyPart];
+    let damage = Math.round(weapon.damage * part.damageMult * (0.85 + Math.random() * 0.3));
+
+    if ((bodyPart === "gogus" || bodyPart === "karin") && defender.armorQuality) {
+      const armor = CB_ARMOR_QUALITY[defender.armorQuality];
+      if (armor) {
+        damage = Math.max(1, Math.round(damage - armor.armorPoints * 0.15));
+      }
+    }
+
+    let instantLethal = false;
+    if (bodyPart === "bas" && Math.random() < part.lethalChance) instantLethal = true;
+    if (bodyPart === "gogus" && Math.random() < (part.organHitChance || 0) * part.lethalChance) instantLethal = true;
+
+    defender.hp -= damage;
+    cbApplyInjury(defender, bodyPart);
+    results.push({ hit: true, damage });
+
+    if (instantLethal || defender.hp <= 0) {
+      defender.hp = 0;
+      defender.status = "dead";
+      results[results.length - 1].lethal = true;
+      break;
+    }
+    if (defender.hp <= CB_CONSTANTS.stunThreshold) {
+      defender.status = "down";
+      results[results.length - 1].downed = true;
+      break;
+    }
+  }
+
+  const hitCount = results.filter(r => r.hit).length;
+  const totalDamage = results.reduce((sum, r) => sum + (r.damage || 0), 0);
+
+  if (defender.status === "dead") {
+    cbLog(`${defender.name} öldü.`);
+  } else if (defender.status === "down") {
+    cbLog(`${defender.name} bayıldı.`);
+  } else if (hitCount > 0) {
+    cbLog(`${defender.name} vuruldu (${hitCount} isabet).`);
+  } else {
+    cbLog(`${defender.name} ıskalandı.`);
+  }
+
+  return { success: true, shotsF: results.length, hitCount, totalDamage, results };
+}
+
+// ---------------- MAKİNELİ TÜFEK: BASTIRMA ATEŞİ (koni AOE) ----------------
+// Saldırganın baktığı yöne doğru dar bir üçgen/koni içindeki TÜM birimleri
+// (dost/düşman fark etmeksizin) düşük isabet ihtimaliyle etkiler.
+function cbFireSuppression(attacker) {
+  const weapon = CB_WEAPONS[attacker.weapon];
+  if (attacker.magAmmo < weapon.suppressAmmoCost) {
+    return { success: false, reason: "not_enough_ammo" };
+  }
+  attacker.magAmmo -= weapon.suppressAmmoCost;
+  attacker.actionsLeft.act = false;
+
+  const coneTiles = cbGetConeTiles(attacker, weapon.range);
+  const affected = [];
+
+  coneTiles.forEach(tile => {
+    const u = cbUnitAt(tile.x, tile.y);
+    if (!u || u === attacker || u.status === "dead" || u.status === "fled") return;
+
+    const dist = Math.abs(attacker.x - tile.x) + Math.abs(attacker.y - tile.y);
+    const distFactor = 1 - (dist / weapon.range) * 0.5; // yakın = tam etki, uzak = azalan
+    const hitChance = Math.max(10, (weapon.baseAccuracy - weapon.suppressAccuracyPenalty) * distFactor);
+    const roll = Math.random() * 100;
+
+    if (roll < hitChance) {
+      const damage = Math.round(weapon.damage * 0.7 * distFactor * (0.85 + Math.random() * 0.3)); // bastırma ateşi biraz daha düşük hasarlı
+      u.hp -= damage;
+      cbApplyInjury(u, "gogus"); // bastırma ateşi genel gövde vuruşu olarak işlenir
+      if (u.hp <= 0) { u.hp = 0; u.status = "dead"; }
+      else if (u.hp <= CB_CONSTANTS.stunThreshold && u.status === "active") u.status = "down";
+      affected.push({ unit: u, damage });
+    } else {
+      affected.push({ unit: u, damage: 0 });
+      // Isabet etmese bile koni içinde kalan birimler "baskı altında" sayılabilir (ileride moral sistemine bağlanabilir)
+    }
+  });
+
+  const hitNames = affected.filter(a => a.damage > 0).map(a => a.unit.name);
+  cbLog(`Bastırma ateşi açıldı. Vurulanlar: ${hitNames.join(", ") || "kimse"}.`);
+
+  return { success: true, affected };
+}
+
+// Saldırganın baktığı yöne göre dar bir üçgen (koni) alan hesaplar - Fog of War'daki
+// görüş üçgeni mantığına benzer ama sabit, dar bir açı kullanır (silahın menzili kadar).
+function cbGetConeTiles(unit, range) {
+  const vec = CB_DIR_VECTOR[unit.dir];
+  const tiles = [];
+  for (let depth = 1; depth <= range; depth++) {
+    const width = Math.floor(depth / 2); // dar koni: derinlik arttıkça yavaş genişler
+    for (let w = -width; w <= width; w++) {
+      let tx, ty;
+      if (vec.dx !== 0) { tx = unit.x + vec.dx * depth; ty = unit.y + w; }
+      else { tx = unit.x + w; ty = unit.y + vec.dy * depth; }
+      if (tx < 0 || tx >= cbState.cols || ty < 0 || ty >= cbState.rows) continue;
+      if (cbHasLineOfSight(unit.x, unit.y, tx, ty)) tiles.push({ x: tx, y: ty });
+    }
+  }
+  return tiles;
 }
 
 function cbApplyInjury(unit, bodyPart) {
@@ -440,6 +653,8 @@ function cbEndUnitTurn() {
   if (cbState.turnIndex >= cbState.turnOrder.length) {
     cbState.round++;
     cbState.units.forEach(u => { if (u.status === "fleeing") cbProcessFleeTick(u); });
+    cbState.units.forEach(u => { if (u.status === "active") cbProcessStatusEffectsForUnit(u); });
+    cbProcessBreachCharges();
     ["player", "enemy"].forEach(side => {
       if (cbTeamOutOfAmmo(side)) {
         cbResolveTeamCrisis(side);
@@ -463,6 +678,8 @@ function cbEndUnitTurn() {
     if (cbState.turnIndex >= cbState.turnOrder.length) {
       cbState.round++;
       cbState.units.forEach(u => { if (u.status === "fleeing") cbProcessFleeTick(u); });
+      cbState.units.forEach(u => { if (u.status === "active") cbProcessStatusEffectsForUnit(u); });
+      cbProcessBreachCharges();
       ["player", "enemy"].forEach(side => {
         if (cbTeamOutOfAmmo(side)) cbResolveTeamCrisis(side);
       });
@@ -481,6 +698,575 @@ function cbCheckVictory() {
   if (!enemyAlive) return "player";
   if (!playerAlive) return "enemy";
   return null;
+}
+
+// ============================================================
+// SARF MALZEMESİ SİSTEMİ (Molotof, El Bombası, Sersemletici, Kırılma Şarjı)
+// ============================================================
+
+// Hedef karenin AOE yarıçapı içindeki tüm kareleri döndürür (Manhattan mesafesi ile,
+// basit ve grid'e uygun bir "daire" yaklaşımı).
+function cbGetAoeTiles(centerX, centerY, radius) {
+  const tiles = [];
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (Math.abs(dx) + Math.abs(dy) > radius) continue; // elmas şeklinde alan
+      const x = centerX + dx, y = centerY + dy;
+      if (x < 0 || x >= cbState.cols || y < 0 || y >= cbState.rows) continue;
+      tiles.push({ x, y });
+    }
+  }
+  return tiles;
+}
+
+// Bir sarf malzemesini (consumable) hedef kareye kullanır. Etki alanındaki TÜM
+// birimleri (dost/düşman ayrımı yapmadan - patlama herkesi etkiler) işler.
+function cbUseConsumable(user, consumableId, targetX, targetY) {
+  const item = CB_CONSUMABLES[consumableId];
+  if (!item) return { success: false, reason: "unknown_item" };
+
+  const aoeTiles = cbGetAoeTiles(targetX, targetY, item.aoeRadius);
+  const affectedUnits = [];
+
+  aoeTiles.forEach(tile => {
+    const unit = cbUnitAt(tile.x, tile.y);
+    if (!unit || unit.status === "dead" || unit.status === "fled") return;
+    affectedUnits.push(unit);
+
+    // Hasar (varsa)
+    if (item.damage > 0) {
+      const dmg = Math.round(item.damage * (0.85 + Math.random() * 0.3));
+      unit.hp -= dmg;
+      if (unit.hp <= 0) {
+        unit.hp = 0;
+        unit.status = "dead";
+      } else if (unit.hp <= CB_CONSTANTS.stunThreshold && unit.status === "active") {
+        unit.status = "down";
+      }
+    }
+
+    // Stun etkisi (flashbang / breach charge)
+    if (item.stunTurns > 0 && unit.status === "active") {
+      unit.stunnedTurnsLeft = (unit.stunnedTurnsLeft || 0) + item.stunTurns;
+    }
+
+    // Yanma etkisi (molotof) - birkaç tur boyunca ek hasar
+    if (item.burnTurns > 0) {
+      unit.burningTurnsLeft = (unit.burningTurnsLeft || 0) + item.burnTurns;
+      unit.burnDamagePerTurn = Math.round(item.damage * 0.3); // her tur bu kadar yanma hasarı
+    }
+  });
+
+  user.actionsLeft.act = false;
+  const affectedNames = affectedUnits.map(u => u.name).join(", ") || "kimse";
+  cbLog(`${item.name} kullanıldı. Etkilenenler: ${affectedNames}.`);
+
+  return { success: true, affectedUnits };
+}
+
+// Stun ve yanma etkilerinin tur başına işlenmesi (cbEndUnitTurn / round geçişinde çağrılır)
+function cbProcessStatusEffectsForUnit(unit) {
+  if (unit.stunnedTurnsLeft > 0) {
+    unit.stunnedTurnsLeft -= 1;
+  }
+  if (unit.burningTurnsLeft > 0) {
+    unit.burningTurnsLeft -= 1;
+    unit.hp -= (unit.burnDamagePerTurn || 5);
+    if (unit.hp <= 0) {
+      unit.hp = 0;
+      unit.status = "dead";
+    } else if (unit.hp <= CB_CONSTANTS.stunThreshold && unit.status === "active") {
+      unit.status = "down";
+    }
+  }
+}
+
+// Bir birimin şu an stun etkisinde olup olmadığını (aksiyon alamaz) kontrol eder
+function cbIsStunned(unit) {
+  return (unit.stunnedTurnsLeft || 0) > 0;
+}
+
+// ============================================================
+// PROSEDÜREL HARİTA ÜRETİCİ (görsel bağımlılığı olmadan, kod ile rastgele harita)
+// ============================================================
+
+// ---- HIDEOUT (iç mekan, odalar + kapılar + tek giriş) ----
+function cbGenerateHideoutMap(size) {
+  size = size || 20;
+  const grid = [];
+  for (let y = 0; y < size; y++) {
+    grid.push(new Array(size).fill("wall"));
+  }
+
+  // Basit oda bölme: haritayı 2x2 ya da 2x3 bir ızgara halinde odalara ayır
+  const roomCols = 2 + Math.floor(Math.random() * 2); // 2-3 sütun
+  const roomRows = 2; // 2 satır (3-4 oda hedefi)
+  const margin = 1; // dış duvar kalınlığı
+  const usableW = size - margin * 2;
+  const usableH = size - margin * 2;
+  const roomW = Math.floor(usableW / roomCols);
+  const roomH = Math.floor(usableH / roomRows);
+
+  const rooms = [];
+  for (let ry = 0; ry < roomRows; ry++) {
+    for (let rx = 0; rx < roomCols; rx++) {
+      const x0 = margin + rx * roomW;
+      const y0 = margin + ry * roomH;
+      const x1 = (rx === roomCols - 1) ? size - margin - 1 : x0 + roomW - 1;
+      const y1 = (ry === roomRows - 1) ? size - margin - 1 : y0 + roomH - 1;
+      rooms.push({ x0, y0, x1, y1 });
+      // Oda içini floor yap
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          grid[y][x] = "floor";
+        }
+      }
+    }
+  }
+
+  // Odalar arası duvarları geri çiz (her odanın kendi sınırı olsun), sonra kapı boşlukları aç
+  // Basitlik için: her komşu oda çiftinin arasına 1 kalınlığında duvar + 1-2 kare kapı deliği koyarız
+  for (let ry = 0; ry < roomRows; ry++) {
+    for (let rx = 0; rx < roomCols; rx++) {
+      const room = rooms[ry * roomCols + rx];
+      // Sağdaki komşuyla arasına duvar + kapı
+      if (rx < roomCols - 1) {
+        const wallX = room.x1 + Math.floor((rooms[ry * roomCols + rx + 1].x0 - room.x1) / 2) || room.x1 + 1;
+        const doorY = room.y0 + Math.floor(Math.random() * (room.y1 - room.y0 - 1)) + 1;
+        for (let y = room.y0; y <= room.y1; y++) {
+          if (grid[y]) grid[y][room.x1 + 1] = "wall";
+        }
+        if (grid[doorY]) grid[doorY][room.x1 + 1] = "door";
+      }
+      // Alttaki komşuyla arasına duvar + kapı
+      if (ry < roomRows - 1) {
+        const doorX = room.x0 + Math.floor(Math.random() * (room.x1 - room.x0 - 1)) + 1;
+        for (let x = room.x0; x <= room.x1; x++) {
+          if (grid[room.y1 + 1]) grid[room.y1 + 1][x] = "wall";
+        }
+        if (grid[room.y1 + 1]) grid[room.y1 + 1][doorX] = "door";
+      }
+    }
+  }
+
+  // Rastgele bir obstacle serpiştir (mobilya hissi, her odada 1-3 tane)
+  rooms.forEach(room => {
+    const count = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      const x = room.x0 + 1 + Math.floor(Math.random() * Math.max(1, room.x1 - room.x0 - 2));
+      const y = room.y0 + 1 + Math.floor(Math.random() * Math.max(1, room.y1 - room.y0 - 2));
+      if (grid[y] && grid[y][x] === "floor") grid[y][x] = "obstacle";
+    }
+  });
+
+  // Ana giriş: dış duvarların birinde (rastgele bir kenar), 1-2 kare
+  const edge = Math.floor(Math.random() * 4); // 0:üst 1:alt 2:sol 3:sağ
+  let entranceX, entranceY;
+  if (edge === 0) { entranceX = margin + Math.floor(Math.random() * usableW); entranceY = 0; }
+  else if (edge === 1) { entranceX = margin + Math.floor(Math.random() * usableW); entranceY = size - 1; }
+  else if (edge === 2) { entranceX = 0; entranceY = margin + Math.floor(Math.random() * usableH); }
+  else { entranceX = size - 1; entranceY = margin + Math.floor(Math.random() * usableH); }
+  grid[entranceY][entranceX] = "entrance";
+  // Girişin hemen içindeki kareyi floor yap (girişten içeri adım atılabilsin)
+  const innerX = entranceX === 0 ? 1 : (entranceX === size - 1 ? size - 2 : entranceX);
+  const innerY = entranceY === 0 ? 1 : (entranceY === size - 1 ? size - 2 : entranceY);
+  if (grid[innerY] && grid[innerY][innerX] !== undefined) grid[innerY][innerX] = "floor";
+
+  return { grid, rows: size, cols: size, entrance: { x: entranceX, y: entranceY }, rooms };
+}
+
+// ---- ARA SOKAK (dar, dolambaçlı, çok siper) ----
+function cbGenerateAlleyMap(size) {
+  size = size || 20;
+  const grid = [];
+  for (let y = 0; y < size; y++) grid.push(new Array(size).fill("wall"));
+
+  // Birden fazla random walk başlatıcı kullan (haritanın farklı bölgelerinden), böylece
+  // tüm harita alanına yayılan bir yol ağı oluşur, tek bir köşede sıkışıp kalmaz.
+  const walkers = 4;
+  const stepsPerWalker = size * 12;
+  for (let w = 0; w < walkers; w++) {
+    let x = 1 + Math.floor(Math.random() * (size - 2));
+    let y = 1 + Math.floor(Math.random() * (size - 2));
+    grid[y][x] = "floor";
+    for (let i = 0; i < stepsPerWalker; i++) {
+      const dir = Math.floor(Math.random() * 4);
+      if (dir === 0) x = Math.min(size - 2, x + 1);
+      else if (dir === 1) x = Math.max(1, x - 1);
+      else if (dir === 2) y = Math.min(size - 2, y + 1);
+      else y = Math.max(1, y - 1);
+      grid[y][x] = "floor";
+      if (Math.random() < 0.3) {
+        const wx = Math.min(size - 2, Math.max(1, x + (Math.random() < 0.5 ? 1 : -1)));
+        grid[y][wx] = "floor";
+      }
+    }
+  }
+
+  // Rastgele obstacle (kutu, çöp konteyneri hissi) - sadece floor karelerin üstüne
+  for (let i = 0; i < size * 2; i++) {
+    const ox = 1 + Math.floor(Math.random() * (size - 2));
+    const oy = 1 + Math.floor(Math.random() * (size - 2));
+    if (grid[oy][ox] === "floor") grid[oy][ox] = "obstacle";
+  }
+
+  // Giriş: alt kenarın ortası civarı, bu noktanın içeri açıldığından emin ol
+  const entranceX = Math.floor(size / 2);
+  const entranceY = size - 1;
+  grid[entranceY][entranceX] = "entrance";
+
+  // Girişten haritanın merkezine kadar garantili bir bağlantı koridoru çiz
+  // (rastgele üretimin girişi izole bırakma ihtimaline karşı).
+  let cx = entranceX, cy = entranceY - 1;
+  const targetY = Math.floor(size / 2);
+  while (cy > targetY) {
+    grid[cy][cx] = "floor";
+    cy--;
+  }
+  grid[cy][cx] = "floor";
+
+  return { grid, rows: size, cols: size, entrance: { x: entranceX, y: entranceY } };
+}
+
+// Harita türüne göre üretici seçer
+// ---- ANAYOL (geniş açık alan, az ama stratejik siper, uzun görüş hatları) ----
+function cbGenerateMainRoadMap(size) {
+  size = size || 20;
+  const grid = [];
+  for (let y = 0; y < size; y++) grid.push(new Array(size).fill("floor"));
+
+  // Dış kenarları duvar yap (haritanın sınırı)
+  for (let x = 0; x < size; x++) { grid[0][x] = "wall"; grid[size - 1][x] = "wall"; }
+  for (let y = 0; y < size; y++) { grid[y][0] = "wall"; grid[y][size - 1] = "wall"; }
+
+  // Yol kenarındaki kaldırım/bina bloklarını simüle etmek için haritanın üst ve alt
+  // şeridine seyrek bina/köşe blokları koy (tam kapatmadan, sadece köşe siperleri).
+  const cornerBlockCount = 2 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < cornerBlockCount; i++) {
+    const isTop = Math.random() < 0.5;
+    const bx = 2 + Math.floor(Math.random() * (size - 8));
+    const by = isTop ? (1 + Math.floor(Math.random() * 3)) : (size - 4 + Math.floor(Math.random() * 3));
+    const bw = 2 + Math.floor(Math.random() * 3);
+    const bh = 2 + Math.floor(Math.random() * 2);
+    for (let y = by; y < Math.min(size - 1, by + bh); y++) {
+      for (let x = bx; x < Math.min(size - 1, bx + bw); x++) {
+        grid[y][x] = "wall";
+      }
+    }
+  }
+
+  // Yolun ortasında refüj/orta ayırıcı hissi - ince, kesintili bir obstacle şeridi
+  const medianY = Math.floor(size / 2) + (Math.random() < 0.5 ? -1 : 1);
+  for (let x = 2; x < size - 2; x++) {
+    if (Math.random() < 0.6) grid[medianY][x] = "obstacle"; // kesintili, tam kapatmıyor (üzerinden görüş geçebilir boşluklar var)
+  }
+
+  // Park edilmiş araçlar / konteynerler: rastgele küçük 1x2 ya da 2x1 obstacle blokları
+  const vehicleCount = 4 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < vehicleCount; i++) {
+    const vx = 1 + Math.floor(Math.random() * (size - 3));
+    const vy = 1 + Math.floor(Math.random() * (size - 3));
+    const horizontal = Math.random() < 0.5;
+    if (grid[vy][vx] === "floor") grid[vy][vx] = "obstacle";
+    if (horizontal && grid[vy][vx + 1] === "floor") grid[vy][vx + 1] = "obstacle";
+    else if (!horizontal && grid[vy + 1] && grid[vy + 1][vx] === "floor") grid[vy + 1][vx] = "obstacle";
+  }
+
+  // Giriş: bir kenarın ortası (rastgele hangi kenar)
+  const edge = Math.floor(Math.random() * 4);
+  let entranceX, entranceY;
+  if (edge === 0) { entranceX = Math.floor(size / 2); entranceY = 0; }
+  else if (edge === 1) { entranceX = Math.floor(size / 2); entranceY = size - 1; }
+  else if (edge === 2) { entranceX = 0; entranceY = Math.floor(size / 2); }
+  else { entranceX = size - 1; entranceY = Math.floor(size / 2); }
+  grid[entranceY][entranceX] = "entrance";
+  // Girişin hemen içi kesinlikle floor olsun
+  const innerX = entranceX === 0 ? 1 : (entranceX === size - 1 ? size - 2 : entranceX);
+  const innerY = entranceY === 0 ? 1 : (entranceY === size - 1 ? size - 2 : entranceY);
+  if (grid[innerY] && grid[innerY][innerX] !== undefined) grid[innerY][innerX] = "floor";
+
+  return { grid, rows: size, cols: size, entrance: { x: entranceX, y: entranceY } };
+}
+
+// ---- KÖPRÜ (doğrusal, dar geçit, az siper, kısıtlı geri çekilme) ----
+function cbGenerateBridgeMap(size) {
+  size = size || 20;
+  const grid = [];
+  for (let y = 0; y < size; y++) grid.push(new Array(size).fill("wall"));
+
+  // Köprü yatay mı dikey mi olsun rastgele seç
+  const horizontal = Math.random() < 0.5;
+  const bridgeWidth = 3 + Math.floor(Math.random() * 2); // 3-4 kare genişlik
+  const start = Math.floor((size - bridgeWidth) / 2);
+
+  if (horizontal) {
+    // Köprü soldan sağa uzanır, dar bir şerit halinde
+    for (let y = start; y < start + bridgeWidth; y++) {
+      for (let x = 1; x < size - 1; x++) {
+        grid[y][x] = "floor";
+      }
+    }
+    // Köprü korkulukları: üst ve alt kenarda ince, kesintili obstacle (siper çok az)
+    for (let x = 1; x < size - 1; x++) {
+      if (Math.random() < 0.25) grid[start][x] = "obstacle";
+      if (Math.random() < 0.25) grid[start + bridgeWidth - 1][x] = "obstacle";
+    }
+    // Girişler: iki uçta (iki yaka)
+    const entranceX = Math.random() < 0.5 ? 0 : size - 1;
+    const entranceY = start + Math.floor(bridgeWidth / 2);
+    grid[entranceY][entranceX] = "entrance";
+    const innerX = entranceX === 0 ? 1 : size - 2;
+    grid[entranceY][innerX] = "floor";
+    return { grid, rows: size, cols: size, entrance: { x: entranceX, y: entranceY } };
+  } else {
+    // Köprü yukarıdan aşağıya uzanır
+    for (let x = start; x < start + bridgeWidth; x++) {
+      for (let y = 1; y < size - 1; y++) {
+        grid[y][x] = "floor";
+      }
+    }
+    for (let y = 1; y < size - 1; y++) {
+      if (Math.random() < 0.25) grid[y][start] = "obstacle";
+      if (Math.random() < 0.25) grid[y][start + bridgeWidth - 1] = "obstacle";
+    }
+    const entranceY = Math.random() < 0.5 ? 0 : size - 1;
+    const entranceX = start + Math.floor(bridgeWidth / 2);
+    grid[entranceY][entranceX] = "entrance";
+    const innerY = entranceY === 0 ? 1 : size - 2;
+    grid[innerY][entranceX] = "floor";
+    return { grid, rows: size, cols: size, entrance: { x: entranceX, y: entranceY } };
+  }
+}
+
+// ---- ARAÇ PUSU (yol kenarı, duran araç enkazları, karışık açık-kapalı alan) ----
+function cbGenerateVehicleAmbushMap(size) {
+  size = size || 20;
+  const grid = [];
+  for (let y = 0; y < size; y++) grid.push(new Array(size).fill("floor"));
+
+  // Dış kenarları duvar yap
+  for (let x = 0; x < size; x++) { grid[0][x] = "wall"; grid[size - 1][x] = "wall"; }
+  for (let y = 0; y < size; y++) { grid[y][0] = "wall"; grid[y][size - 1] = "wall"; }
+
+  // Ana yol şeridi: haritayı ikiye bölen, nispeten açık bir koridor (yol)
+  // Yolun iki tarafında daha yoğun obstacle (kenar/kaldırım hissi)
+  const roadY = Math.floor(size / 2);
+  const roadWidth = 4;
+
+  // Yol dışındaki alanlara rastgele obstacle serpiştir (bina/çit hissi, orta yoğunluk)
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const distFromRoad = Math.abs(y - roadY);
+      if (distFromRoad > roadWidth / 2) {
+        if (Math.random() < 0.25) grid[y][x] = "obstacle";
+      }
+    }
+  }
+
+  // Duran/devrilmiş araç enkazları: yolun üzerinde ve kenarında 2-3 kareli obstacle blokları
+  const vehicleCount = 3 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < vehicleCount; i++) {
+    const vx = 2 + Math.floor(Math.random() * (size - 6));
+    const vy = roadY + Math.floor(Math.random() * 3) - 1;
+    const horizontal = Math.random() < 0.5;
+    if (grid[vy] && grid[vy][vx] === "floor") grid[vy][vx] = "obstacle";
+    if (horizontal) {
+      if (grid[vy] && grid[vy][vx + 1] === "floor") grid[vy][vx + 1] = "obstacle";
+      if (grid[vy] && grid[vy][vx + 2] === "floor") grid[vy][vx + 2] = "obstacle";
+    } else {
+      if (grid[vy + 1] && grid[vy + 1][vx] === "floor") grid[vy + 1][vx] = "obstacle";
+    }
+  }
+
+  // Giriş: yolun bir ucunda (sol ya da sağ kenar, yol hizasında)
+  const fromLeft = Math.random() < 0.5;
+  const entranceX = fromLeft ? 0 : size - 1;
+  const entranceY = roadY;
+  grid[entranceY][entranceX] = "entrance";
+  const innerX = fromLeft ? 1 : size - 2;
+  grid[entranceY][innerX] = "floor";
+
+  return { grid, rows: size, cols: size, entrance: { x: entranceX, y: entranceY } };
+}
+
+function cbGenerateMap(mapType, size) {
+  if (mapType === "hideout") return cbGenerateHideoutMap(size);
+  if (mapType === "alley") return cbGenerateAlleyMap(size);
+  if (mapType === "mainroad") return cbGenerateMainRoadMap(size);
+  if (mapType === "bridge") return cbGenerateBridgeMap(size);
+  if (mapType === "vehicleambush") return cbGenerateVehicleAmbushMap(size);
+  // Varsayılan: alley tarzı
+  return cbGenerateAlleyMap(size);
+}
+
+// ============================================================
+// BREACH CHARGE SİSTEMİ (gecikmeli patlama, duvar/kapı kırma)
+// ============================================================
+// cbState.pendingBreaches: [{ x, y, plantedByRound, detonateAtRound, placedBy }]
+
+function cbCanPlaceBreach(unit, targetX, targetY) {
+  const dist = Math.abs(unit.x - targetX) + Math.abs(unit.y - targetY);
+  if (dist !== 1) return false; // sadece bitişik kare
+  const tile = cbTileAt(targetX, targetY);
+  return !!CB_BREACHABLE_TILES[tile];
+}
+
+function cbPlaceBreachCharge(unit, targetX, targetY) {
+  if (!cbCanPlaceBreach(unit, targetX, targetY)) return false;
+  cbState.pendingBreaches = cbState.pendingBreaches || [];
+  cbState.pendingBreaches.push({
+    x: targetX, y: targetY,
+    detonateAtRound: cbState.round + 1, // 1 tur sonra patlar
+    placedBy: unit.id,
+  });
+  unit.actionsLeft.act = false;
+  cbLog(`${unit.name} bir kırılma şarjı yerleştirdi.`);
+  return true;
+}
+
+// Round geçişinde çağrılır: zamanı gelen charge'ları patlatır
+function cbProcessBreachCharges() {
+  cbState.pendingBreaches = cbState.pendingBreaches || [];
+  const toDetonate = cbState.pendingBreaches.filter(b => cbState.round >= b.detonateAtRound);
+  toDetonate.forEach(breach => cbDetonateBreach(breach));
+  cbState.pendingBreaches = cbState.pendingBreaches.filter(b => cbState.round < b.detonateAtRound);
+}
+
+function cbDetonateBreach(breach) {
+  const item = CB_CONSUMABLES.kirilma_sarji;
+  const placer = cbState.units.find(u => u.id === breach.placedBy);
+
+  // 1) HASAR: patlama noktasının yakın çevresi (mevcut dar radius, her iki tarafı da kapsar)
+  const damageTiles = cbGetAoeTiles(breach.x, breach.y, item.aoeRadius);
+  const damaged = [];
+  damageTiles.forEach(t => {
+    const u = cbUnitAt(t.x, t.y);
+    if (!u || u.status === "dead" || u.status === "fled") return;
+    damaged.push(u);
+    const dmg = Math.round(item.damage * (0.85 + Math.random() * 0.3));
+    u.hp -= dmg;
+    if (u.hp <= 0) {
+      u.hp = 0;
+      u.status = "dead";
+    } else if (u.hp <= CB_CONSTANTS.stunThreshold && u.status === "active") {
+      u.status = "down";
+    }
+  });
+
+  // 2) STUN: duvarın KARŞI tarafındaki kapalı odanın tamamı (flood-fill).
+  // ÖNEMLİ: Bu hesaplama duvar/kapı YIKILMADAN ÖNCE yapılmalı, aksi halde flood-fill
+  // artık "floor" olan breach noktasından dışarıyla içeriyi birleştirip tek dev alan sanır.
+  if (placer) {
+    const farSideStart = cbFindFarSideStartTile(breach.x, breach.y, placer.x, placer.y);
+    if (farSideStart) {
+      const roomTiles = cbFloodFillRoom(farSideStart.x, farSideStart.y);
+      const stunned = [];
+      roomTiles.forEach(t => {
+        const u = cbUnitAt(t.x, t.y);
+        if (!u || u.status === "dead" || u.status === "fled" || u.status !== "active") return;
+        if (damaged.includes(u)) return; // zaten hasar aldıysa tekrar işlemeye gerek yok, ayrı stun ekle
+        u.stunnedTurnsLeft = (u.stunnedTurnsLeft || 0) + item.stunTurns;
+        stunned.push(u);
+      });
+      // Hasar alan ama ölmeyen/bayılmayan kişilere de stun uygula (breach noktasındaki kişi)
+      damaged.forEach(u => {
+        if (u.status === "active") u.stunnedTurnsLeft = (u.stunnedTurnsLeft || 0) + item.stunTurns;
+      });
+      cbLog(`Kırılma şarjı patladı. Hasar alan: ${damaged.map(u => u.name).join(", ") || "kimse"}. Sersemleyen (oda): ${stunned.map(u => u.name).join(", ") || "kimse"}.`);
+      // Duvarı/kapıyı EN SON yıkıyoruz (stun hesaplaması bitince)
+      const tile = cbTileAt(breach.x, breach.y);
+      if (tile === "wall" || tile === "door") {
+        cbState.grid[breach.y][breach.x] = "floor";
+      }
+      return;
+    }
+  }
+
+  // Karşı taraf bulunamazsa (örn. placer bilgisi kayıpsa) eski basit davranışa düş
+  damaged.forEach(u => {
+    if (u.status === "active") u.stunnedTurnsLeft = (u.stunnedTurnsLeft || 0) + item.stunTurns;
+  });
+  cbLog(`Kırılma şarjı patladı. Etkilenenler: ${damaged.map(u => u.name).join(", ") || "kimse"}.`);
+
+  // Duvarı/kapıyı yık (fallback durumunda da)
+  const tile = cbTileAt(breach.x, breach.y);
+  if (tile === "wall" || tile === "door") {
+    cbState.grid[breach.y][breach.x] = "floor";
+  }
+}
+
+// Breach noktasının, yerleştiren kişinin durduğu tarafın TERSİNDEKİ komşu karesini bulur.
+// Bu kare, flood-fill'in başlangıç noktası olur (karşı odanın bir parçası).
+// Not: obstacle kareler de "karşı taraf" içinde sayılır (flood-fill zaten obstacle'da durur,
+// ama başlangıç noktası olarak kabul edilmemeli - bu yüzden en yakın FLOOR komşusunu ararız,
+// sadece breach noktasına bitişik olanı değil, geometrik olarak ters yöndeki ilk floor'u).
+function cbFindFarSideStartTile(breachX, breachY, placerX, placerY) {
+  const dx = Math.sign(breachX - placerX);
+  const dy = Math.sign(breachY - placerY);
+
+  // Karşı taraftaki ilk kare (breach noktasının hemen ötesi)
+  const firstX = breachX + dx, firstY = breachY + dy;
+  if (firstX < 0 || firstX >= cbState.cols || firstY < 0 || firstY >= cbState.rows) return null;
+  const firstTile = cbTileAt(firstX, firstY);
+  if (firstTile === "wall" || firstTile === "door") return null; // hemen sınıra çarptık, karşı taraf yok
+  if (firstTile === "floor") return { x: firstX, y: firstY };
+
+  // Obstacle ise: o obstacle kümesinin çevresinde bir FLOOR arayarak "karşı odanın" içine gir.
+  // Mini BFS: sadece obstacle kareler üzerinden yayılıp, ilk floor komşuya ulaşınca dur.
+  const visited = new Set([`${firstX},${firstY}`]);
+  const queue = [{ x: firstX, y: firstY }];
+  const MAX_PROBE = 40;
+  let steps = 0;
+
+  while (queue.length > 0 && steps < MAX_PROBE) {
+    steps++;
+    const curr = queue.shift();
+    const neighbors = [
+      { x: curr.x + 1, y: curr.y }, { x: curr.x - 1, y: curr.y },
+      { x: curr.x, y: curr.y + 1 }, { x: curr.x, y: curr.y - 1 },
+    ];
+    for (const n of neighbors) {
+      const key = `${n.x},${n.y}`;
+      if (visited.has(key)) continue;
+      if (n.x < 0 || n.x >= cbState.cols || n.y < 0 || n.y >= cbState.rows) continue;
+      const t = cbTileAt(n.x, n.y);
+      if (t === "floor") return n; // karşı odanın gerçek zeminine ulaştık
+      if (t === "obstacle") {
+        visited.add(key);
+        queue.push(n);
+      }
+      // wall/door ise o yönde durur, genişlemez
+    }
+  }
+  return null;
+}
+
+// Belirtilen noktadan başlayarak, duvar/kapı ile çevrelenene kadar bağlı floor
+// karelerini toplar (flood-fill). "Oda" sınırlarını bu şekilde tespit ederiz.
+function cbFloodFillRoom(startX, startY) {
+  const visited = new Set([`${startX},${startY}`]);
+  const queue = [{ x: startX, y: startY }];
+  const room = [{ x: startX, y: startY }];
+  const MAX_ROOM_SIZE = 150; // güvenlik sınırı, açık haritalarda sonsuz büyümeyi önler
+
+  while (queue.length > 0 && room.length < MAX_ROOM_SIZE) {
+    const curr = queue.shift();
+    const neighbors = [
+      { x: curr.x + 1, y: curr.y }, { x: curr.x - 1, y: curr.y },
+      { x: curr.x, y: curr.y + 1 }, { x: curr.x, y: curr.y - 1 },
+    ];
+    neighbors.forEach(n => {
+      const key = `${n.x},${n.y}`;
+      if (visited.has(key)) return;
+      if (n.x < 0 || n.x >= cbState.cols || n.y < 0 || n.y >= cbState.rows) return;
+      const t = cbTileAt(n.x, n.y);
+      if (t !== "floor") return; // duvar/kapı/obstacle odayı sınırlar, geçilmez
+      visited.add(key);
+      room.push(n);
+      queue.push(n);
+    });
+  }
+  return room;
 }
 
 // ============================================================

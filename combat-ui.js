@@ -12,16 +12,16 @@ let cbPlacingUnitId = null; // şu an yerleştirilmekte olan birim
 
 function cbSetupDemo() {
   cbPlacementRoster = [
-    { id: cbUid(), name: "Q", side: "player", dir: "up", hp: 300, weapon: "tabanca_low", magAmmo: 8, spareMags: 2, aimSkill: 10, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "W", side: "player", dir: "up", hp: 300, weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "E", side: "player", dir: "right", hp: 300, weapon: "tufek_low", magAmmo: 5, spareMags: 1, aimSkill: 15, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
-    { id: cbUid(), name: "R", side: "player", dir: "up", hp: 300, weapon: "makineli_low", magAmmo: 20, spareMags: 1, aimSkill: 0, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "Q", side: "player", dir: "up", hp: 100, weapon: "tabanca_low", magAmmo: 8, spareMags: 2, aimSkill: 10, armorQuality: "standart", consumables: { sersemletici: 2, kirilma_sarji: 2, el_bombasi: 1, molotof: 1 }, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "W", side: "player", dir: "up", hp: 100, weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, armorQuality: "hurdalik", actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "E", side: "player", dir: "right", hp: 100, weapon: "tufek_low", magAmmo: 5, spareMags: 1, aimSkill: 15, armorQuality: "kaliteli", actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
+    { id: cbUid(), name: "R", side: "player", dir: "up", hp: 100, weapon: "makineli_low", magAmmo: 20, spareMags: 1, aimSkill: 0, armorQuality: null, actionsLeft: { move: true, act: true }, status: "active", injuries: [] },
   ];
   cbEnemyRosterTemplate = [
-    { name: "A", weapon: "tabanca_low", magAmmo: 8, spareMags: 1, aimSkill: 8, personality: "agresif" },
-    { name: "B", weapon: "makineli_low", magAmmo: 20, spareMags: 0, aimSkill: 0, personality: "agresif" },
-    { name: "C", weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, personality: "savunmaci" },
-    { name: "D", weapon: "tufek_low", magAmmo: 5, spareMags: 0, aimSkill: 12, personality: "sinsi" },
+    { name: "A", weapon: "tabanca_low", magAmmo: 8, spareMags: 1, aimSkill: 8, personality: "agresif", armorQuality: "hurdalik" },
+    { name: "B", weapon: "makineli_low", magAmmo: 20, spareMags: 0, aimSkill: 0, personality: "agresif", armorQuality: null },
+    { name: "C", weapon: "pompali_low", magAmmo: 2, spareMags: 1, aimSkill: 5, personality: "savunmaci", armorQuality: "standart" },
+    { name: "D", weapon: "tufek_low", magAmmo: 5, spareMags: 0, aimSkill: 12, personality: "sinsi", armorQuality: null },
   ];
 
   cbState.units = [];
@@ -38,19 +38,42 @@ let cbEnemyRosterTemplate = [];
 // Yerleştirme aşaması tamamlanınca çağrılır: düşmanları otomatik yerleştirir,
 // FoW'u aktif eder ve kombatı başlatır.
 function cbPlaceEnemiesForAmbush() {
-  const spots = cbFindClusteredFloorTiles(cbEnemyRosterTemplate.length, 4);
   const dirs = ["up", "down", "left", "right"];
-  // Tüm grup aynı genel yöne baksın (bir arada duran, henüz tetikte olmayan bir ekip hissi)
-  const groupDir = dirs[Math.floor(Math.random() * dirs.length)];
+  const count = cbEnemyRosterTemplate.length;
+
+  let spots;
+  if (cbState.mapType === "hideout" && cbState.mapRooms && cbState.mapRooms.length > 0) {
+    // Her birim, farklı bir odaya rastgele düşürülür (odalar arası dağınık,
+    // ama her zaman bir odanın içinde - koridor/açık alanda değil).
+    spots = [];
+    for (let i = 0; i < count; i++) {
+      const room = cbState.mapRooms[Math.floor(Math.random() * cbState.mapRooms.length)];
+      const roomFloorTiles = [];
+      for (let y = room.y0; y <= room.y1; y++) {
+        for (let x = room.x0; x <= room.x1; x++) {
+          if (cbTileAt(x, y) === "floor" && !cbUnitAt(x, y) && !spots.some(s => s.x === x && s.y === y)) {
+            roomFloorTiles.push({ x, y });
+          }
+        }
+      }
+      if (roomFloorTiles.length > 0) {
+        spots.push(roomFloorTiles[Math.floor(Math.random() * roomFloorTiles.length)]);
+      }
+    }
+  } else {
+    spots = cbFindClusteredFloorTiles(count, 4);
+  }
 
   cbEnemyRosterTemplate.forEach((template, i) => {
     const spot = spots[i];
     if (!spot) return;
+    const randomDir = dirs[Math.floor(Math.random() * dirs.length)];
     cbState.units.push({
       id: cbUid(), name: template.name, side: "enemy",
-      x: spot.x, y: spot.y, dir: groupDir,
-      hp: 300, weapon: template.weapon, magAmmo: template.magAmmo, spareMags: template.spareMags,
+      x: spot.x, y: spot.y, dir: randomDir,
+      hp: 100, weapon: template.weapon, magAmmo: template.magAmmo, spareMags: template.spareMags,
       aimSkill: template.aimSkill, personality: template.personality || "agresif",
+      armorQuality: template.armorQuality || null,
       actionsLeft: { move: true, act: true }, status: "active", injuries: [],
     });
   });
@@ -82,6 +105,32 @@ function cbDrawLaser(attacker, defender) {
 
   requestAnimationFrame(() => { line.classList.add("firing"); });
   setTimeout(() => line.remove(), 550);
+}
+
+// Bastırma ateşinin koni alanını, saldırgandan koni içindeki her kareye kısa
+// çizgiler çizerek görselleştirir (lazer efektinin çoklu-hedef versiyonu).
+function cbDrawConeEffect(attacker) {
+  const weapon = CB_WEAPONS[attacker.weapon];
+  const tiles = cbGetConeTiles(attacker, weapon.range);
+  const svg = document.getElementById("cb-laser-overlay");
+  const tileSize = 30;
+  const x1 = attacker.x * tileSize + tileSize / 2;
+  const y1 = attacker.y * tileSize + tileSize / 2;
+
+  tiles.forEach(t => {
+    const x2 = t.x * tileSize + tileSize / 2;
+    const y2 = t.y * tileSize + tileSize / 2;
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+    line.setAttribute("x2", x2); line.setAttribute("y2", y2);
+    line.setAttribute("stroke", weapon.laserColor || "#f0a830");
+    line.setAttribute("stroke-width", 1);
+    line.setAttribute("opacity", "0.5");
+    line.setAttribute("class", "cb-laser-line");
+    svg.appendChild(line);
+    requestAnimationFrame(() => { line.classList.add("firing"); });
+    setTimeout(() => line.remove(), 550);
+  });
 }
 
 function cbSyncLaserOverlaySize() {
@@ -151,9 +200,11 @@ function cbRenderGrid() {
       el.className = "cb-tile " + tile + (isVisible ? "" : " hidden");
       if (reachableSet.has(key)) el.className += " cb-reachable";
 
-      // Yerleştirme aşamasında: boş floor kareleri, yerleştirilebilir olarak vurgulanır
+      // Yerleştirme aşamasında: giriş noktasına yakın boş floor kareleri, yerleştirilebilir olarak vurgulanır
       if (isPlacement && cbPlacingUnitId && tile === "floor" && !cbUnitAt(x, y)) {
-        el.className += " cb-placeable";
+        const withinRadius = !cbState.mapEntrance ||
+          (Math.abs(x - cbState.mapEntrance.x) + Math.abs(y - cbState.mapEntrance.y)) <= CB_PLACEMENT_RADIUS;
+        if (withinRadius) el.className += " cb-placeable";
       }
 
       el.dataset.x = x; el.dataset.y = y;
@@ -165,6 +216,14 @@ function cbRenderGrid() {
         marker.textContent = unit.name;
         marker.title = unit.name;
         el.appendChild(marker);
+      }
+
+      // Bekleyen (henüz patlamamış) breach charge işareti - tüm ekip görebilir
+      const pendingBreach = (cbState.pendingBreaches || []).find(b => b.x === x && b.y === y);
+      if (pendingBreach) {
+        const bmarker = document.createElement("div");
+        bmarker.className = "cb-breach-marker";
+        el.appendChild(bmarker);
       }
 
       el.addEventListener("click", (ev) => cbHandleTileClick(x, y, ev));
@@ -203,9 +262,74 @@ function cbHandleTileClick(x, y, ev) {
     return;
   }
 
+  if (cbMode && cbMode.startsWith("consumable:")) {
+    const key = cbMode.split(":")[1];
+    if (key === "kirilma_sarji") {
+      if (!cbCanPlaceBreach(current, x, y)) {
+        cbLog("Buraya kırılma şarjı yerleştirilemez (bitişik duvar/kapı olmalı).");
+        return;
+      }
+      const placed = cbPlaceBreachCharge(current, x, y);
+      if (placed) current.consumables.kirilma_sarji -= 1;
+    } else {
+      const range = CB_CONSUMABLE_THROW_RANGE[key] || 4;
+      const dist = Math.abs(current.x - x) + Math.abs(current.y - y);
+      if (dist > range) {
+        cbLog(`Bu malzeme o kadar uzağa atılamaz (maksimum ${range} kare).`);
+        return;
+      }
+      current.consumables[key] -= 1;
+      cbUseConsumable(current, key, x, y);
+    }
+    cbMode = null;
+    cbRefreshAll();
+    return;
+  }
+
+  if (cbMode === "loot") {
+    const target = cbUnitAt(x, y);
+    const dist = Math.abs(current.x - x) + Math.abs(current.y - y);
+    if (!target || (target.status !== "dead" && target.status !== "down")) {
+      cbLog("Sadece ölü ya da bayılmış birimlerin yanından malzeme alabilirsin.");
+      return;
+    }
+    if (dist > 1) {
+      cbLog("Malzeme almak için bitişik olman gerekir.");
+      return;
+    }
+    cbLootUnit(current, target);
+    cbMode = null;
+    cbRefreshAll();
+    return;
+  }
+
+  if (cbMode === "borrow-ammo") {
+    const target = cbUnitAt(x, y);
+    const dist = Math.abs(current.x - x) + Math.abs(current.y - y);
+    if (!target || target.side !== current.side || target.status !== "down") {
+      cbLog("Sadece bayılmış bir müttefikten mermi alabilirsin.");
+      return;
+    }
+    if (dist > 1) {
+      cbLog("Mermi almak için bitişik olman gerekir.");
+      return;
+    }
+    const success = cbBorrowAmmo(current, target);
+    if (success) {
+      cbLog(`${current.name}, ${target.name}'den mermi aldı.`);
+    } else {
+      cbLog("Bu müttefikte alınacak uygun mermi yok (silah uyumsuz ya da mermisi bitmiş).");
+    }
+    cbMode = null;
+    cbRefreshAll();
+    return;
+  }
+
   const unit = cbUnitAt(x, y);
   if (unit) cbShowUnitPopover(unit, ev.clientX, ev.clientY);
 }
+
+const CB_PLACEMENT_RADIUS = 4; // giriş noktasına en fazla bu kadar kare uzaklıkta yerleşilebilir
 
 function cbHandlePlacementClick(x, y) {
   if (!cbPlacingUnitId) return;
@@ -213,6 +337,14 @@ function cbHandlePlacementClick(x, y) {
     cbLog("Sadece yürünebilir (floor) karelere yerleştirebilirsin.");
     cbRefreshAll();
     return;
+  }
+  if (cbState.mapEntrance) {
+    const dist = Math.abs(x - cbState.mapEntrance.x) + Math.abs(y - cbState.mapEntrance.y);
+    if (dist > CB_PLACEMENT_RADIUS) {
+      cbLog(`Sadece girişe yakın (${CB_PLACEMENT_RADIUS} kare içinde) yerleşebilirsin.`);
+      cbRefreshAll();
+      return;
+    }
   }
   if (cbUnitAt(x, y)) return; // dolu kare
 
@@ -230,7 +362,7 @@ function cbHandlePlacementClick(x, y) {
 function cbShowUnitPopover(unit, clientX, clientY) {
   const pop = document.getElementById("cb-popover");
   let html = `<div style="font-weight:600; margin-bottom:6px;">${unit.name}</div>`;
-  html += `<div>HP: ${unit.hp}/300</div>`;
+  html += `<div>HP: ${unit.hp}/${CB_CONSTANTS.maxHP}</div>`;
 
   if (unit.side === "player") {
     const weapon = CB_WEAPONS[unit.weapon];
@@ -268,7 +400,7 @@ function cbRenderSideLists() {
     card.className = "cb-unit-card" + (current && current.id === u.id ? " current" : "");
     card.innerHTML = `
       <div class="name">${u.name} ${u.status !== "active" ? "(" + u.status + ")" : ""}</div>
-      <div class="hpbar"><div class="hpfill" style="width:${Math.max(0,u.hp/300*100)}%"></div></div>
+      <div class="hpbar"><div class="hpfill" style="width:${Math.max(0,u.hp/CB_CONSTANTS.maxHP*100)}%"></div></div>
       <div>${u.hp} HP</div>
     `;
     card.addEventListener("click", (e) => cbShowUnitPopover(u, e.clientX, e.clientY));
@@ -281,12 +413,84 @@ function cbRenderSideLists() {
     const visibleToPlayer = cbAllVisibleTilesForSide("player").has(`${u.x},${u.y}`);
     card.innerHTML = `
       <div class="name">${u.name} ${u.status !== "active" ? "(" + u.status + ")" : ""}</div>
-      <div class="hpbar"><div class="hpfill" style="width:${Math.max(0,u.hp/300*100)}%"></div></div>
+      <div class="hpbar"><div class="hpfill" style="width:${Math.max(0,u.hp/CB_CONSTANTS.maxHP*100)}%"></div></div>
       <div>${visibleToPlayer ? (u.hp) + " HP görünüyor" : "görünmüyor"}</div>
     `;
     if (visibleToPlayer) card.addEventListener("click", (e) => cbShowUnitPopover(u, e.clientX, e.clientY));
     rightEl.appendChild(card);
   });
+}
+
+// Her sarf malzemesinin, karakterden ne kadar uzağa atılabileceği (menzil, kare cinsinden).
+// Silahlardan bağımsız, elle atma mesafesi olarak tasarlandı.
+const CB_CONSUMABLE_THROW_RANGE = {
+  sersemletici: 4,
+  el_bombasi: 4,
+  molotof: 3,
+  kirilma_sarji: 1, // sadece bitişik duvar/kapı (cbCanPlaceBreach zaten bunu kontrol ediyor)
+};
+
+// Ölü/bayılmış bir birimin (dost veya düşman fark etmeksizin) sarf malzemelerini
+// ve zırhını alır. Düşmandan alınan malzemeler de kullanılabilir hale gelir.
+function cbLootUnit(looter, target) {
+  const lootedItems = [];
+
+  if (target.consumables) {
+    Object.keys(target.consumables).forEach(key => {
+      const amount = target.consumables[key];
+      if (amount > 0) {
+        looter.consumables = looter.consumables || {};
+        looter.consumables[key] = (looter.consumables[key] || 0) + amount;
+        target.consumables[key] = 0;
+        const item = CB_CONSUMABLES[key];
+        lootedItems.push(`${item ? item.name : key} x${amount}`);
+      }
+    });
+  }
+
+  if (target.armorQuality && !looter.armorQuality) {
+    looter.armorQuality = target.armorQuality;
+    target.armorQuality = null;
+    const armor = CB_ARMOR_QUALITY[looter.armorQuality];
+    lootedItems.push(`${armor ? armor.label : "Zırh"}`);
+  }
+
+  if (lootedItems.length === 0) {
+    cbLog(`${target.name} üzerinde alınacak bir şey yok.`);
+  } else {
+    cbLog(`${looter.name}, ${target.name}'den şunları aldı: ${lootedItems.join(", ")}.`);
+  }
+}
+
+function cbRenderConsumableMenu() {
+  const current = cbCurrentUnit();
+  const menu = document.getElementById("cb-consumable-menu");
+  if (!current || !current.consumables) { menu.style.display = "none"; return; }
+
+  const entries = Object.keys(current.consumables).filter(k => current.consumables[k] > 0);
+  if (entries.length === 0) {
+    menu.innerHTML = `<span style="font-size:10.5px; color:#9098a8;">Envanterinde sarf malzemesi yok.</span>`;
+    menu.style.display = "flex";
+    return;
+  }
+
+  menu.innerHTML = "";
+  entries.forEach(key => {
+    const item = CB_CONSUMABLES[key];
+    if (!item) return;
+    const btn = document.createElement("button");
+    btn.className = "secondary";
+    btn.textContent = `${item.name} (${current.consumables[key]})`;
+    btn.addEventListener("click", () => {
+      cbMode = "consumable:" + key;
+      document.getElementById("cb-bodyparts").style.display = "none";
+      document.getElementById("cb-consumable-menu").style.display = "none";
+      cbRenderGrid();
+      cbRenderActionPanel();
+    });
+    menu.appendChild(btn);
+  });
+  menu.style.display = "flex";
 }
 
 function cbRenderActionPanel() {
@@ -295,24 +499,50 @@ function cbRenderActionPanel() {
   document.getElementById("cb-round").textContent = cbState.round;
 
   const isPlayerTurn = !!(current && current.side === "player" && current.status === "active");
-  document.getElementById("cb-btn-move").disabled = !isPlayerTurn || !current.actionsLeft.move;
-  document.getElementById("cb-btn-fire").disabled = !isPlayerTurn || !current.actionsLeft.act || current.magAmmo <= 0;
-  document.getElementById("cb-btn-reload").disabled = !isPlayerTurn || !current.actionsLeft.act || current.spareMags <= 0;
-  document.getElementById("cb-btn-cover").disabled = !isPlayerTurn || !current.actionsLeft.act || current.takingCover;
+  const stunned = isPlayerTurn && cbIsStunned(current);
+
+  document.getElementById("cb-btn-move").disabled = !isPlayerTurn || stunned || !current.actionsLeft.move;
+  document.getElementById("cb-btn-fire").disabled = !isPlayerTurn || stunned || !current.actionsLeft.act || current.magAmmo <= 0;
+
+  const suppressBtn = document.getElementById("cb-btn-suppress");
+  const currentWeapon = isPlayerTurn ? CB_WEAPONS[current.weapon] : null;
+  const isMachineGun = currentWeapon && currentWeapon.hasFireModes;
+  suppressBtn.style.display = isMachineGun ? "inline-block" : "none";
+  if (isMachineGun) {
+    suppressBtn.disabled = !isPlayerTurn || stunned || !current.actionsLeft.act || current.magAmmo < currentWeapon.suppressAmmoCost;
+    suppressBtn.textContent = `Bastırma Ateşi (${currentWeapon.suppressAmmoCost} mermi)`;
+  }
+  document.getElementById("cb-btn-reload").disabled = !isPlayerTurn || stunned || !current.actionsLeft.act || current.spareMags <= 0;
+  document.getElementById("cb-btn-cover").disabled = !isPlayerTurn || stunned || !current.actionsLeft.act || current.takingCover;
   document.getElementById("cb-btn-cover").classList.toggle("mode-active", isPlayerTurn && current.takingCover);
-  document.getElementById("cb-btn-flee").disabled = !isPlayerTurn;
+  document.getElementById("cb-btn-flee").disabled = !isPlayerTurn || stunned;
   document.getElementById("cb-btn-end").disabled = !isPlayerTurn;
+
+  const consumableBtn = document.getElementById("cb-btn-consumables");
+  const hasAnyConsumable = isPlayerTurn && current.consumables && Object.values(current.consumables).some(v => v > 0);
+  consumableBtn.disabled = !isPlayerTurn || stunned || !current.actionsLeft.act || !hasAnyConsumable;
+  consumableBtn.classList.toggle("mode-active", cbMode && cbMode.startsWith("consumable:"));
+
+  const lootBtn = document.getElementById("cb-btn-loot");
+  lootBtn.disabled = !isPlayerTurn || stunned || !current.actionsLeft.act;
+  lootBtn.classList.toggle("mode-active", cbMode === "loot");
+
+  const borrowBtn = document.getElementById("cb-btn-borrow-ammo");
+  borrowBtn.disabled = !isPlayerTurn || stunned || !current.actionsLeft.act;
+  borrowBtn.classList.toggle("mode-active", cbMode === "borrow-ammo");
 
   document.getElementById("cb-btn-move").classList.toggle("mode-active", cbMode === "move");
   document.getElementById("cb-btn-fire").classList.toggle("mode-active", cbMode === "fire");
 
   document.querySelectorAll("[data-turn]").forEach(btn => {
-    btn.disabled = !isPlayerTurn || (isPlayerTurn && current.turnedThisTurn);
+    btn.disabled = !isPlayerTurn || stunned || (isPlayerTurn && current.turnedThisTurn);
     btn.classList.toggle("mode-active", isPlayerTurn && current.dir === btn.dataset.turn);
   });
 
   const statusLine = document.getElementById("cb-status-line");
-  if (isPlayerTurn) {
+  if (stunned) {
+    statusLine.textContent = `${current.name} sersemlemiş durumda (${current.stunnedTurnsLeft} tur kaldı). Sadece sırayı bitirebilirsin.`;
+  } else if (isPlayerTurn) {
     statusLine.textContent = `Hareket: ${current.actionsLeft.move ? "kullanılabilir" : "kullanıldı"} | Aksiyon: ${current.actionsLeft.act ? "kullanılabilir" : "kullanıldı"}`;
   } else {
     statusLine.textContent = "";
@@ -358,10 +588,22 @@ function cbRunEnemyAI() {
     const unit = cbCurrentUnit();
     if (!unit || unit.side !== "enemy" || unit.status !== "active") { cbRefreshAll(); return; }
 
+    if (cbIsStunned(unit)) {
+      cbLog(`${unit.name} sersemlemiş durumda, hareket edemiyor.`);
+      cbEndUnitTurn();
+      cbRefreshAll();
+      return;
+    }
+
     const decision = cbDecideEnemyAction(unit); // combat-engine.js içinde tanımlı, gelişmiş AI mantığı
     if (decision.type === "fire") {
       cbDrawLaser(unit, decision.target);
-      cbFire(unit, decision.target, decision.bodyPart);
+      const weapon = CB_WEAPONS[unit.weapon];
+      if (weapon.hasFireModes) {
+        cbFireBurst(unit, decision.target, decision.bodyPart);
+      } else {
+        cbFire(unit, decision.target, decision.bodyPart);
+      }
     } else if (decision.type === "reload") {
       cbReload(unit);
     } else if (decision.type === "cover") {
@@ -395,6 +637,15 @@ document.getElementById("cb-btn-fire").addEventListener("click", () => {
   cbRenderActionPanel();
 });
 
+document.getElementById("cb-btn-suppress").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  cbDrawConeEffect(current);
+  cbFireSuppression(current);
+  cbMode = null;
+  cbRefreshAll();
+});
+
 document.getElementById("cb-btn-reload").addEventListener("click", () => {
   const current = cbCurrentUnit();
   if (current) { cbReload(current); cbRefreshAll(); }
@@ -406,6 +657,31 @@ document.getElementById("cb-btn-cover").addEventListener("click", () => {
   const ok = cbTakeCover(current);
   if (!ok) cbLog(`${current.name} burada siperlenecek bir şey yok.`);
   cbRefreshAll();
+});
+
+document.getElementById("cb-btn-consumables").addEventListener("click", () => {
+  const menu = document.getElementById("cb-consumable-menu");
+  const isOpen = menu.style.display !== "none";
+  if (isOpen) { menu.style.display = "none"; return; }
+  cbRenderConsumableMenu();
+});
+
+document.getElementById("cb-btn-loot").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  cbMode = cbMode === "loot" ? null : "loot";
+  document.getElementById("cb-bodyparts").style.display = "none";
+  cbRenderGrid();
+  cbRenderActionPanel();
+});
+
+document.getElementById("cb-btn-borrow-ammo").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  cbMode = cbMode === "borrow-ammo" ? null : "borrow-ammo";
+  document.getElementById("cb-bodyparts").style.display = "none";
+  cbRenderGrid();
+  cbRenderActionPanel();
 });
 
 document.getElementById("cb-btn-flee").addEventListener("click", () => {
@@ -436,7 +712,12 @@ document.querySelectorAll("#cb-bodyparts button").forEach(btn => {
     const current = cbCurrentUnit();
     if (!current || !cbFireTargetUnit) return;
     cbDrawLaser(current, cbFireTargetUnit);
-    cbFire(current, cbFireTargetUnit, btn.dataset.part);
+    const weapon = CB_WEAPONS[current.weapon];
+    if (weapon.hasFireModes) {
+      cbFireBurst(current, cbFireTargetUnit, btn.dataset.part);
+    } else {
+      cbFire(current, cbFireTargetUnit, btn.dataset.part);
+    }
     cbFireTargetUnit = null;
     cbMode = null;
     document.getElementById("cb-bodyparts").style.display = "none";
@@ -545,8 +826,11 @@ document.getElementById("cb-btn-start-ambush").addEventListener("click", () => {
 });
 
 // ---------------- BAŞLAT ----------------
-(async function init() {
-  await cbLoadMap("map_alley1.json");
-  cbSetupDemo();
-  cbRefreshAll();
-})();
+document.querySelectorAll("#cb-map-select-overlay [data-map]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.getElementById("cb-map-select-overlay").style.display = "none";
+    cbLoadProceduralMap(btn.dataset.map, 20);
+    cbSetupDemo();
+    cbRefreshAll();
+  });
+});

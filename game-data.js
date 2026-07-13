@@ -88,22 +88,22 @@ const DISTRICTS = [
 const BUSINESS_TYPES = [
   {
     id: "koruma", name: "Koruma Rüşveti", icon: "",
-    baseCost: 5000, baseIncomePerHour: 900, heatPerHour: 0.5,
+    baseCost: 5000, baseIncomePerHour: 180, heatPerHour: 0.5,
     description: "Yerel esnaftan düzenli haraç toplama ağı.",
   },
   {
     id: "kumarhane", name: "Yeraltı Kumarhanesi", icon: "",
-    baseCost: 18000, baseIncomePerHour: 2800, heatPerHour: 1.5,
+    baseCost: 18000, baseIncomePerHour: 520, heatPerHour: 1.5,
     description: "Yüksek kazanç, yüksek görünürlük.",
   },
   {
     id: "gasp", name: "Gasp Şebekesi", icon: "",
-    baseCost: 3000, baseIncomePerHour: 550, heatPerHour: 1.2,
+    baseCost: 3000, baseIncomePerHour: 110, heatPerHour: 1.2,
     description: "Sokakta hızlı ve kirli para.",
   },
   {
     id: "dolandiricilik", name: "Dolandırıcılık Ofisi", icon: "",
-    baseCost: 9000, baseIncomePerHour: 1500, heatPerHour: 0.9,
+    baseCost: 9000, baseIncomePerHour: 280, heatPerHour: 0.9,
     description: "Sahte yatırım ve sigorta dolandırıcılığı operasyonu.",
   },
 ];
@@ -123,21 +123,54 @@ const DRUG_PRODUCTS = [
     id: "esrar", name: "Esrar", icon: "",
     requires: [{ material: "bitkisel_ozut", amount: 2 }],
     yieldPerBatch: 12, streetPrice: 140, riskPerBatch: 1,
+    minigame: {
+      steps: [
+        { type: "add_material", label: "Karadal Özütünü tepsiye yay", targetValue: null },
+        { type: "temperature", label: "Fırını 60°C'de tut", targetMin: 55, targetMax: 65, durationSec: 20 },
+        { type: "wait", label: "Kurumaya bırak", durationSec: 15 },
+        { type: "pack", label: "Dozları paketle", targetValue: null },
+      ],
+    },
   },
   {
     id: "meth", name: "Meth", icon: "",
     requires: [{ material: "kimyasal_a", amount: 2 }, { material: "kimyasal_b", amount: 1 }],
     yieldPerBatch: 10, streetPrice: 220, riskPerBatch: 3,
+    minigame: {
+      steps: [
+        { type: "add_material", label: "Zestrayn-9'u reaksiyon kabına ekle", targetValue: null },
+        { type: "temperature", label: "Sıcaklığı 130°C'de sabitle", targetMin: 122, targetMax: 138, durationSec: 25 },
+        { type: "add_material", label: "Voltrik Asit ekle", targetValue: null },
+        { type: "temperature", label: "Soğutma — 20°C altına indir", targetMin: 0, targetMax: 20, durationSec: 15 },
+      ],
+    },
   },
   {
     id: "kokain", name: "Kokain", icon: "",
     requires: [{ material: "bitkisel_ozut", amount: 3 }, { material: "kimyasal_a", amount: 1 }],
     yieldPerBatch: 8, streetPrice: 380, riskPerBatch: 4,
+    minigame: {
+      steps: [
+        { type: "add_material", label: "Karadal Özütünü ezip süzgeçten geçir", targetValue: null },
+        { type: "temperature", label: "Sıcaklığı 90°C'de tut", targetMin: 84, targetMax: 96, durationSec: 20 },
+        { type: "add_material", label: "Zestrayn-9 ile işle", targetValue: null },
+        { type: "wait", label: "Kristalleşmeyi bekle", durationSec: 20 },
+      ],
+    },
   },
   {
     id: "eroin", name: "Eroin", icon: "",
     requires: [{ material: "bitkisel_ozut", amount: 2 }, { material: "kimyasal_b", amount: 2 }],
     yieldPerBatch: 6, streetPrice: 450, riskPerBatch: 5,
+    minigame: {
+      steps: [
+        { type: "add_material", label: "Karadal Özütünü kaynatma kabına koy", targetValue: null },
+        { type: "temperature", label: "Sıcaklığı 110°C'de tut", targetMin: 103, targetMax: 117, durationSec: 25 },
+        { type: "add_material", label: "Voltrik Asit ile nötrleştir", targetValue: null },
+        { type: "temperature", label: "Soğutma — 15°C altına indir", targetMin: 0, targetMax: 15, durationSec: 20 },
+        { type: "pack", label: "Dozları paketle", targetValue: null },
+      ],
+    },
   },
 ];
 
@@ -148,17 +181,32 @@ const LAB_LEVELS = [
 ];
 
 // Araçlar: hammaddeyi üretim tesisinden laboratuvara taşımak için
+// ---- PLAKA ÜRETİMİ (TR format: İl Kodu + Harf(ler) + Rakam) ----
+const PLATE_LETTERS = "ABCDEFGHIJKLMNOPRSTUVYZ"; // TR plakalarında kullanılmayan Q,W,X hariç
+const PLATE_PROVINCE_CODES = [34, 6, 35, 16, 7, 1, 42, 27, 55, 61, 41, 21, 26, 38]; // yaygın büyük şehir kodları
+
+function generatePlate() {
+  const province = PLATE_PROVINCE_CODES[Math.floor(Math.random() * PLATE_PROVINCE_CODES.length)];
+  const format = Math.floor(Math.random() * 3);
+  const randLetter = () => PLATE_LETTERS[Math.floor(Math.random() * PLATE_LETTERS.length)];
+  const randDigits = (n) => String(Math.floor(Math.random() * Math.pow(10, n))).padStart(n, "0");
+
+  if (format === 0) return `${province} ${randLetter()} ${randDigits(4)}`;
+  if (format === 1) return `${province} ${randLetter()}${randLetter()} ${randDigits(3)}`;
+  return `${province} ${randLetter()}${randLetter()}${randLetter()} ${randDigits(2)}`;
+}
+
 const VEHICLES = [
-  { id: "panelvan", name: "Panelvan", cost: 8000, capacity: 30, speedMin: 8, riskModifier: 1.0 },
-  { id: "kamyon", name: "Kamyon", cost: 20000, capacity: 80, speedMin: 14, riskModifier: 1.3 },
-  { id: "spor_araba", name: "Spor Araba", cost: 35000, capacity: 10, speedMin: 4, riskModifier: 0.6 },
+  { id: "panelvan", name: "Panelvan", cost: 8000, capacity: 30, passengerCapacity: 4, speedMin: 8, riskModifier: 1.0, maxDurability: 100 },
+  { id: "kamyon", name: "Kamyon", cost: 20000, capacity: 80, passengerCapacity: 2, speedMin: 14, riskModifier: 1.3, maxDurability: 150 },
+  { id: "spor_araba", name: "Spor Araba", cost: 35000, capacity: 10, passengerCapacity: 2, speedMin: 4, riskModifier: 0.6, maxDurability: 60 },
 ];
 
 // ---- SOYGUN HEDEFLERİ ----
 const HEIST_TARGETS = [
   {
     id: "kuyumcu", name: "Kapalıçarşı Kuyumcusu", icon: "", difficulty: 1,
-    requiredRoles: ["silahsor", "sokak_lideri"],
+    requiredRoles: ["asker_devriye", "asker_devriye"],
     equipmentOptions: [
       { id: "maske", name: "Maskeler", cost: 500, successBonus: 5 },
       { id: "kesici", name: "Kasa Kesici", cost: 2000, successBonus: 15 },
@@ -169,7 +217,7 @@ const HEIST_TARGETS = [
   },
   {
     id: "banka_subesi", name: "Banka Şubesi", icon: "", difficulty: 2,
-    requiredRoles: ["silahsor", "muhasebeci", "sokak_lideri"],
+    requiredRoles: ["asker_devriye", "muhasebeci", "asker_devriye"],
     equipmentOptions: [
       { id: "sinyal_kesici", name: "Sinyal Kesici", cost: 4000, successBonus: 12 },
       { id: "agir_silah", name: "Ağır Silah Seti", cost: 6000, successBonus: 10 },
@@ -180,7 +228,7 @@ const HEIST_TARGETS = [
   },
   {
     id: "nakit_kamyonu", name: "Zırhlı Nakit Kamyonu", icon: "", difficulty: 3,
-    requiredRoles: ["silahsor", "silahsor", "surucu"],
+    requiredRoles: ["asker_devriye", "asker_devriye", "surucu"],
     equipmentOptions: [
       { id: "patlayici", name: "Kapı Patlayıcısı", cost: 7000, successBonus: 18 },
       { id: "takip_cihazi", name: "Takip Cihazı", cost: 3000, successBonus: 8 },
@@ -191,7 +239,7 @@ const HEIST_TARGETS = [
   },
   {
     id: "ozel_sergi", name: "Özel Koleksiyon Sergisi", icon: "", difficulty: 4,
-    requiredRoles: ["silahsor", "muhasebeci", "casus", "surucu"],
+    requiredRoles: ["asker_devriye", "muhasebeci", "casus", "surucu"],
     equipmentOptions: [
       { id: "sahte_kimlik", name: "Sahte Kimlikler", cost: 5000, successBonus: 14 },
       { id: "lazer_kesici", name: "Lazer Kesici", cost: 12000, successBonus: 20 },
@@ -203,17 +251,99 @@ const HEIST_TARGETS = [
 ];
 
 // ---- EKİP ROLLERİ ----
+// ---- EKİP ROLLERİ (Specialty Sistemi) ----
+// Asker rolünün silah türüne göre alt-sınıfları var (subclass alanı).
+// combatRole: soygun/karşı-operasyon gibi mevcut sistemlerde "silahlı eleman"
+// gereksinimini karşılayan roller (asker alt-sınıfları).
 const CREW_ROLES = {
-  silahsor: { name: "Silahşor", icon: "", baseWage: 300 },
-  muhasebeci: { name: "Muhasebeci", icon: "", baseWage: 250 },
-  enforcer: { name: "Enforcer", icon: "", baseWage: 280 },
-  casus: { name: "Casus", icon: "", baseWage: 320 },
-  surucu: { name: "Sürücü", icon: "", baseWage: 240 },
-  sokak_lideri: { name: "Sokak Lideri", icon: "", baseWage: 260 },
+  asker_nisanci: { name: "Asker (Nişancı)", icon: "", baseWage: 340, category: "asker", weaponAffinity: "tufek", combatRole: true },
+  asker_agir_silahli: { name: "Asker (Ağır Silahlı)", icon: "", baseWage: 340, category: "asker", weaponAffinity: "makineli", combatRole: true },
+  asker_devriye: { name: "Asker (Devriye)", icon: "", baseWage: 300, category: "asker", weaponAffinity: "tabanca", combatRole: true },
+  satici: { name: "Satıcı", icon: "", baseWage: 220, category: "ekonomi" },
+  bas_satici: { name: "Dağıtım Amiri", icon: "", baseWage: 380, category: "ekonomi" },
+  uretici: { name: "Uyuşturucu Üreticisi", icon: "", baseWage: 300, category: "ekonomi" },
+  surucu: { name: "Sürücü", icon: "", baseWage: 240, category: "destek", combatRole: true },
+  casus: { name: "Casus", icon: "", baseWage: 320, category: "istihbarat" },
+  doktor: { name: "Doktor", icon: "", baseWage: 350, category: "destek" },
+  muhasebeci: { name: "Muhasebeci", icon: "", baseWage: 250, category: "destek" },
+  tamirci: { name: "Tamirci", icon: "", baseWage: 260, category: "destek" },
 };
+
+// Soygun/karşı-operasyon gibi sistemlerin "silahlı eleman" ihtiyacını
+// karşılayan rollerin listesi (eski 'silahsor'/'enforcer' yerine geçti)
+const COMBAT_CAPABLE_ROLES = Object.keys(CREW_ROLES).filter(r => CREW_ROLES[r].combatRole);
+
+// ---- ATTRIBUTE SİSTEMİ (20 üzerinden, her karakterde 15 attribute) ----
+const ATTRIBUTES = {
+  uyusturucu_uretme: { name: "Uyuşturucu Üretme" },
+  makineli_kabiliyeti: { name: "Makineli Tüfek Kabiliyeti" },
+  pompali_kabiliyeti: { name: "Pompalı Tüfek Kabiliyeti" },
+  tabanca_kabiliyeti: { name: "Tabanca Kabiliyeti" },
+  nisan_kabiliyeti: { name: "Nişan Almalı Silah Kabiliyeti" },
+  surculuk: { name: "Sürücülük Kabiliyeti" },
+  liderlik: { name: "Liderlik Kabiliyeti" },
+  ikna: { name: "İkna Kabiliyeti" },
+  dayaniklilik: { name: "Dayanıklılık" },
+  zeka: { name: "Zeka" },
+  karizma: { name: "Karizma" },
+  medikal: { name: "Medikal Yetenek" },
+  sadakat_direnci: { name: "Sadakat Direnci" },
+  gizlilik: { name: "Gizlilik" },
+  pazarlik: { name: "Pazarlık Yeteneği" },
+};
+
+// Her rolün "yüksek eğilimli" (10-20 aralığından çekilen) attribute'ları.
+// Listelenmeyen tüm attribute'lar normal aralıktan (4-12) çekilir - hiçbiri asla eksik olmaz.
+const ROLE_ATTRIBUTE_FOCUS = {
+  asker_nisanci: ["nisan_kabiliyeti", "dayaniklilik"],
+  asker_agir_silahli: ["makineli_kabiliyeti", "dayaniklilik"],
+  asker_devriye: ["tabanca_kabiliyeti", "pompali_kabiliyeti"],
+  satici: ["ikna", "karizma"],
+  bas_satici: ["liderlik", "pazarlik"],
+  uretici: ["uyusturucu_uretme", "zeka"],
+  surucu: ["surculuk", "dayaniklilik"],
+  casus: ["zeka", "gizlilik"],
+  doktor: ["medikal", "zeka"],
+  muhasebeci: ["zeka", "pazarlik"],
+  tamirci: ["zeka", "dayaniklilik"],
+};
+
+const ATTRIBUTE_NORMAL_MIN = 4, ATTRIBUTE_NORMAL_MAX = 12;
+const ATTRIBUTE_FOCUS_MIN = 10, ATTRIBUTE_FOCUS_MAX = 20;
+
+// Bir rol için tam 15 attribute'luk bir set üretir. Odaklı attribute'lar yüksek
+// aralıktan, geri kalanı normal aralıktan çekilir - hiçbir attribute asla eksik kalmaz.
+function generateAttributesForRole(roleId) {
+  const focusKeys = ROLE_ATTRIBUTE_FOCUS[roleId] || [];
+  const attrs = {};
+  Object.keys(ATTRIBUTES).forEach(key => {
+    const isFocus = focusKeys.includes(key);
+    const min = isFocus ? ATTRIBUTE_FOCUS_MIN : ATTRIBUTE_NORMAL_MIN;
+    const max = isFocus ? ATTRIBUTE_FOCUS_MAX : ATTRIBUTE_NORMAL_MAX;
+    attrs[key] = min + Math.floor(Math.random() * (max - min + 1));
+  });
+  return attrs;
+}
 
 const FIRST_NAMES = ["Kemal", "Hakan", "Serkan", "Murat", "Emre", "Tolga", "Barış", "Cem", "Deniz", "Onur", "Selim", "Volkan", "Ayşe", "Elif", "Zeynep", "Derya", "Pınar", "Sibel", "Kaan", "Burak"];
 const LAST_NAMES = ["Yılmaz", "Kaya", "Demir", "Şahin", "Çelik", "Aydın", "Öztürk", "Arslan", "Doğan", "Kılıç", "Aslan", "Koç", "Polat", "Özkan", "Bulut", "Ateş"];
+
+// ---- MAHALLELER (her semtin alt katmanı) ----
+const NEIGHBORHOODS = {
+  tarlabasi: ["Kardeş Sokağı", "Çınar Meydanı", "Demirci Geçidi"],
+  kasimpasa: ["Liman Sırtı", "Tersane Arkası", "Kaptan Sokağı"],
+  beyoglu: ["Balo Sokağı", "Asmalı Geçit", "Nardis Köşesi", "Perşembe Pazarı"],
+  besiktas: ["İskele Meydanı", "Barbaros Sırtı", "Akaretler Arkası"],
+  nisantasi: ["Vitrin Caddesi", "Maçka Yamacı"],
+  sisli: ["Ofis Bloğu", "Cevahir Arkası", "Bomonti Yokuşu"],
+  sariyer: ["Yalı Sırtı", "Koru Kenarı"],
+  fatih: ["At Meydanı", "Sur Dibi", "Çarşamba Pazarı"],
+  halic: ["Tersane Yolu", "Dökümhane Sokağı"],
+  zeytinburnu: ["Sanayi Bloğu", "Demiryolu Kenarı"],
+  bakirkoy: ["Rıhtım Sokağı", "İskele Arkası"],
+  uskudar: ["Çarşı İçi", "Tekke Yokuşu"],
+  kadikoy: ["Bahariye Sırtı", "Moda Kıyısı", "Çarşı Arkası"],
+};
 
 // ---- RAKİP ÇETELER ----
 const RIVAL_GANGS = [
@@ -245,25 +375,25 @@ const COUNTER_OPS = {
   ambush: {
     name: "Kaçış Aracını Sıkıştır", icon: "",
     description: "Rakip bir soygundan dönerken yolunu kes. Kazanırsan ganimeti alırsın.",
-    requiredRoles: ["silahsor", "surucu"],
+    requiredRoles: ["asker_devriye", "surucu"],
     baseSuccess: 45,
   },
   hijack: {
     name: "Nakliyeyi Soy", icon: "",
     description: "Rakibin hammadde/ürün taşıyan aracını pusuya düşür, yükü çal.",
-    requiredRoles: ["silahsor"],
+    requiredRoles: ["asker_devriye"],
     baseSuccess: 55,
   },
   hideout_raid: {
     name: "Hideout Baskını", icon: "",
     description: "Rakibin ana üssüne baskın düzenle. Yüksek risk, yüksek ödül.",
-    requiredRoles: ["silahsor", "silahsor", "enforcer", "sokak_lideri"],
+    requiredRoles: ["asker_devriye", "asker_devriye", "asker_agir_silahli", "asker_nisanci"],
     baseSuccess: 25,
   },
   kidnap: {
     name: "Adam Kaçır / İnfaz Et", icon: "",
     description: "Rakibin bir aracını durdurup adamlarını etkisiz hale getir. Çeteyi geçici zayıflatır.",
-    requiredRoles: ["silahsor", "enforcer"],
+    requiredRoles: ["asker_devriye", "asker_agir_silahli"],
     baseSuccess: 40,
   },
 };
@@ -517,6 +647,53 @@ const IDEOLOGIES = [
   },
 ];
 
+// ---- ZORLUK SEVİYELERİ ----
+// Ekonomi (gelir/gider) + rakip/operasyon zorluğunu birlikte etkiler.
+const DIFFICULTY_LEVELS = [
+  {
+    id: "kolay", name: "Kolay",
+    description: "İlk kez oynayanlar için. Daha bol gelir, daha kolay rakipler.",
+    incomeMult: 1.35, expenseMult: 0.8,
+    rivalStrengthMult: 0.75, operationSuccessBonus: 15,
+  },
+  {
+    id: "orta", name: "Orta",
+    description: "Dengeli bir deneyim. Ne çok kolay ne çok zor.",
+    incomeMult: 1.0, expenseMult: 1.0,
+    rivalStrengthMult: 1.0, operationSuccessBonus: 0,
+  },
+  {
+    id: "zor", name: "Zor",
+    description: "Gerçek bir mücadele. Az gelir, güçlü rakipler, hiçbir şey bedavaya gelmez.",
+    incomeMult: 0.75, expenseMult: 1.25,
+    rivalStrengthMult: 1.3, operationSuccessBonus: -15,
+  },
+];
+
+// ---- SORGU / İŞKENCE SEVİYELERİ ----
+// Her seviye, mahkumun canından RASTGELE bir aralıkta can götürür (sabit değil).
+// Can, mevcut değerin 1/3'ünün altına düşünce mahkum konuşur (bilgi verir, tek seferlik).
+const INTERROGATION_LEVELS = [
+  {
+    id: "hafif", name: "Hafif Baskı",
+    description: "Tehdit ve psikolojik baskı. Düşük risk, yavaş sonuç.",
+    damageMin: 2, damageMax: 5,
+  },
+  {
+    id: "orta", name: "Orta Şiddet",
+    description: "Fiziksel zorlama. Orta risk, orta hız.",
+    damageMin: 5, damageMax: 10,
+  },
+  {
+    id: "agir", name: "Ağır İşkence",
+    description: "Acımasız yöntemler. Yüksek risk, hızlı sonuç — ama ölüm ihtimali ciddi.",
+    damageMin: 10, damageMax: 20,
+  },
+];
+
+const INTERROGATION_HEAL_MIN_MINUTES = 5;
+const INTERROGATION_HEAL_MAX_MINUTES = 10;
+
 if (typeof module !== "undefined") {
   module.exports = {
     DISTRICTS, BUSINESS_TYPES, RAW_MATERIALS, REFINERY_SITE_COST,
@@ -525,5 +702,8 @@ if (typeof module !== "undefined") {
     RANDOM_EVENTS, GAME_CONSTANTS, ORIGINS, LEADERSHIP_STYLES, IDEOLOGIES,
     POLICE_FACTION, COUNTER_OPS,
     WEAPONS, ARMORS, CONSUMABLES, AOE_PATTERNS,
+    generatePlate, DIFFICULTY_LEVELS,
+    INTERROGATION_LEVELS, INTERROGATION_HEAL_MIN_MINUTES, INTERROGATION_HEAL_MAX_MINUTES,
+    ATTRIBUTES, ROLE_ATTRIBUTE_FOCUS, generateAttributesForRole,
   };
 }

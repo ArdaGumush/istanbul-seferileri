@@ -27,6 +27,17 @@
   .cb-tile.floor{ background:#1d2330; }
   .cb-tile.wall{ background:#3a3226; }
   .cb-tile.obstacle{ background:#4a4438; }
+  .cb-tile.door{ background:#5a4a35; }
+  .cb-tile.entrance{ background:#7a3a2a; }
+  .cb-breach-marker{
+    position:absolute; inset:6px; border-radius:3px;
+    background:#d4453d; opacity:0.85;
+    animation: cb-breach-pulse 1s ease-in-out infinite;
+  }
+  @keyframes cb-breach-pulse{
+    0%, 100%{ opacity:0.5; }
+    50%{ opacity:0.95; }
+  }
   .cb-tile.hidden{ filter: brightness(0.55) saturate(0.5); }
   .cb-tile.visible-empty{ filter:brightness(1.15); }
 
@@ -102,6 +113,15 @@
 </head>
 <body>
 
+<div id="cb-map-select-overlay" style="position:fixed; inset:0; background:#0a0d14; z-index:200; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px;">
+  <h2 style="color:#c9a24b; font-family:'IBM Plex Mono', monospace;">Harita Seç</h2>
+  <button data-map="alley" style="padding:14px 28px;">Ara Sokak (Alley) — Rastgele Üretilir</button>
+  <button data-map="hideout" style="padding:14px 28px;">Hideout (İç Mekan) — Rastgele Üretilir</button>
+  <button data-map="mainroad" style="padding:14px 28px;">Anayol (Main Road) — Rastgele Üretilir</button>
+  <button data-map="bridge" style="padding:14px 28px;">Köprü (Bridge) — Rastgele Üretilir</button>
+  <button data-map="vehicleambush" style="padding:14px 28px;">Araç Pusu (Vehicle Ambush) — Rastgele Üretilir</button>
+</div>
+
 <div id="cb-left"><h3>Müttefikler</h3><div id="cb-left-list"></div></div>
 <div id="cb-map-wrap"><div id="cb-grid-container" style="position:relative;"><div id="cb-grid"></div><svg id="cb-laser-overlay" style="position:absolute; inset:0; pointer-events:none;"></svg></div></div>
 <div id="cb-right"><h3>Düşmanlar</h3><div id="cb-right-list"></div></div>
@@ -117,11 +137,16 @@
     <div style="display:flex; gap:6px;">
       <button id="cb-btn-move">Hareket Modu</button>
       <button id="cb-btn-fire">Ateş Et</button>
+      <button id="cb-btn-suppress" class="secondary" style="display:none;">Bastırma Ateşi</button>
       <button id="cb-btn-reload">Şarjör Değiştir</button>
       <button id="cb-btn-cover" class="secondary">Siper Al</button>
+      <button id="cb-btn-consumables" class="secondary">Consumables</button>
+      <button id="cb-btn-loot" class="secondary">Malzeme Al</button>
+      <button id="cb-btn-borrow-ammo" class="secondary">Mermi Ödünç Al</button>
       <button id="cb-btn-flee" class="secondary">Kaç</button>
       <button id="cb-btn-end" class="secondary">Sırayı Bitir</button>
     </div>
+    <div id="cb-consumable-menu" style="display:none; gap:6px; flex-wrap:wrap;"></div>
     <div style="display:flex; gap:6px;">
       <span style="font-size:10.5px; color:#9098a8; align-self:center;">Bakış:</span>
       <button class="secondary" data-turn="up">▲</button>
