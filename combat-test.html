@@ -19,7 +19,10 @@
   }
   #cb-left{ grid-column:1; }
   #cb-right{ grid-column:3; }
-  #cb-map-wrap{ grid-column:2; grid-row:1; background:#05070b; border:1px solid #2a3142; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #cb-map-wrap{ grid-column:2; grid-row:1; background:#05070b; border:1px solid #2a3142; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden; touch-action:none; position:relative; }
+  #cb-grid-container{ transform-origin: 0 0; will-change: transform; }
+  #cb-zoom-controls{ position:absolute; bottom:8px; right:8px; z-index:10; display:flex; flex-direction:column; gap:4px; }
+  #cb-zoom-controls button{ width:34px; height:34px; padding:0; font-size:16px; font-weight:600; }
   #cb-bottom{ grid-column:1/4; grid-row:2; background:#12161f; border:1px solid #2a3142; border-radius:8px; padding:10px; display:flex; gap:12px; max-height: 45vh; overflow-y: auto; }
 
   #cb-grid{ display:grid; }
@@ -123,7 +126,14 @@
 </div>
 
 <div id="cb-left"><h3>Müttefikler</h3><div id="cb-left-list"></div></div>
-<div id="cb-map-wrap"><div id="cb-grid-container" style="position:relative;"><div id="cb-grid"></div><svg id="cb-laser-overlay" style="position:absolute; inset:0; pointer-events:none;"></svg></div></div>
+<div id="cb-map-wrap">
+  <div id="cb-grid-container" style="position:relative;"><div id="cb-grid"></div><svg id="cb-laser-overlay" style="position:absolute; inset:0; pointer-events:none;"></svg></div>
+  <div id="cb-zoom-controls">
+    <button id="cb-zoom-in" class="secondary">+</button>
+    <button id="cb-zoom-out" class="secondary">−</button>
+    <button id="cb-zoom-reset" class="secondary" style="font-size:11px;">⟳</button>
+  </div>
+</div>
 <div id="cb-right"><h3>Düşmanlar</h3><div id="cb-right-list"></div></div>
 
 <div id="cb-bottom">

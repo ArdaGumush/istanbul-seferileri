@@ -3,6 +3,7 @@
 // ============================================================
 
 let cbMode = null; // 'move' | 'fire' | null
+let cbSuppressNextClick = false; // pan/pinch sonrası yanlışlıkla tıklamayı önlemek için
 let cbFireTargetUnit = null;
 
 function cbUid() { return Math.random().toString(36).slice(2, 9); }
@@ -231,9 +232,11 @@ function cbRenderGrid() {
     }
   }
   cbSyncLaserOverlaySize();
+  if (typeof cbApplyTransform === "function") cbApplyTransform();
 }
 
 function cbHandleTileClick(x, y, ev) {
+  if (cbSuppressNextClick) { cbSuppressNextClick = false; return; }
   if (cbState.phase === "placement") {
     cbHandlePlacementClick(x, y);
     return;
@@ -824,6 +827,144 @@ document.getElementById("cb-btn-start-ambush").addEventListener("click", () => {
   cbFinishPlacementAndStartCombat();
   cbRefreshAll();
 });
+
+// ============================================================
+// PAN / ZOOM SİSTEMİ (dokunmatik ve fare desteği)
+// ============================================================
+const cbViewState = { scale: 1, panX: 0, panY: 0 };
+const CB_MIN_SCALE = 0.5, CB_MAX_SCALE = 2.5;
+
+function cbApplyTransform() {
+  const container = document.getElementById("cb-grid-container");
+  container.style.transform = `translate(${cbViewState.panX}px, ${cbViewState.panY}px) scale(${cbViewState.scale})`;
+}
+
+function cbClampPan() {
+  const wrap = document.getElementById("cb-map-wrap");
+  const grid = document.getElementById("cb-grid");
+  if (!wrap || !grid || !grid.offsetWidth) return;
+  const scaledW = grid.offsetWidth * cbViewState.scale;
+  const scaledH = grid.offsetHeight * cbViewState.scale;
+  const wrapW = wrap.offsetWidth, wrapH = wrap.offsetHeight;
+  // İçerik wrap'ten küçükse ortala, büyükse sınırlar içinde tut
+  const minX = Math.min(0, wrapW - scaledW), maxX = Math.max(0, wrapW - scaledW);
+  const minY = Math.min(0, wrapH - scaledH), maxY = Math.max(0, wrapH - scaledH);
+  cbViewState.panX = Math.max(minX, Math.min(maxX, cbViewState.panX));
+  cbViewState.panY = Math.max(minY, Math.min(maxY, cbViewState.panY));
+}
+
+function cbSetZoom(newScale, anchorX, anchorY) {
+  const wrap = document.getElementById("cb-map-wrap");
+  const rect = wrap.getBoundingClientRect();
+  const ax = anchorX !== undefined ? anchorX - rect.left : wrap.offsetWidth / 2;
+  const ay = anchorY !== undefined ? anchorY - rect.top : wrap.offsetHeight / 2;
+
+  const clamped = Math.max(CB_MIN_SCALE, Math.min(CB_MAX_SCALE, newScale));
+  // Yakınlaştırma noktasının ekran üzerindeki konumu sabit kalsın diye pan'i orantılı ayarla
+  const scaleRatio = clamped / cbViewState.scale;
+  cbViewState.panX = ax - (ax - cbViewState.panX) * scaleRatio;
+  cbViewState.panY = ay - (ay - cbViewState.panY) * scaleRatio;
+  cbViewState.scale = clamped;
+
+  cbClampPan();
+  cbApplyTransform();
+}
+
+function cbResetView() {
+  cbViewState.scale = 1;
+  cbViewState.panX = 0;
+  cbViewState.panY = 0;
+  cbClampPan();
+  cbApplyTransform();
+}
+
+(function initPanZoom() {
+  const wrap = document.getElementById("cb-map-wrap");
+  let isPanning = false;
+  let lastX = 0, lastY = 0;
+  let pinchStartDist = 0, pinchStartScale = 1;
+  let touchStartX = 0, touchStartY = 0;
+  const DRAG_THRESHOLD = 8; // bu kadar pikselden fazla hareket ederse "pan" sayılır, tıklama iptal olur
+
+  function getTouchDist(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function getTouchCenter(touches) {
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    };
+  }
+
+  wrap.addEventListener("touchstart", (ev) => {
+    if (ev.touches.length === 1) {
+      isPanning = true;
+      lastX = ev.touches[0].clientX;
+      lastY = ev.touches[0].clientY;
+      touchStartX = lastX; touchStartY = lastY;
+      cbSuppressNextClick = false;
+    } else if (ev.touches.length === 2) {
+      isPanning = false;
+      pinchStartDist = getTouchDist(ev.touches);
+      pinchStartScale = cbViewState.scale;
+      cbSuppressNextClick = true; // iki parmaklı hareket asla tıklama sayılmasın
+    }
+  }, { passive: true });
+
+  wrap.addEventListener("touchmove", (ev) => {
+    if (ev.touches.length === 1 && isPanning) {
+      const dx = ev.touches[0].clientX - lastX;
+      const dy = ev.touches[0].clientY - lastY;
+      cbViewState.panX += dx;
+      cbViewState.panY += dy;
+      lastX = ev.touches[0].clientX;
+      lastY = ev.touches[0].clientY;
+
+      const totalMove = Math.abs(lastX - touchStartX) + Math.abs(lastY - touchStartY);
+      if (totalMove > DRAG_THRESHOLD) cbSuppressNextClick = true;
+
+      cbClampPan();
+      cbApplyTransform();
+    } else if (ev.touches.length === 2) {
+      const dist = getTouchDist(ev.touches);
+      const center = getTouchCenter(ev.touches);
+      const newScale = pinchStartScale * (dist / pinchStartDist);
+      cbSetZoom(newScale, center.x, center.y);
+    }
+  }, { passive: true });
+
+  wrap.addEventListener("touchend", (ev) => {
+    if (ev.touches.length === 0) isPanning = false;
+  });
+
+  // Masaüstü fare desteği: sürükleyerek pan, tekerlek ile zoom
+  let mouseDown = false;
+  wrap.addEventListener("mousedown", (ev) => {
+    mouseDown = true;
+    lastX = ev.clientX; lastY = ev.clientY;
+  });
+  window.addEventListener("mousemove", (ev) => {
+    if (!mouseDown) return;
+    const dx = ev.clientX - lastX, dy = ev.clientY - lastY;
+    cbViewState.panX += dx; cbViewState.panY += dy;
+    lastX = ev.clientX; lastY = ev.clientY;
+    cbClampPan();
+    cbApplyTransform();
+  });
+  window.addEventListener("mouseup", () => { mouseDown = false; });
+
+  wrap.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const delta = ev.deltaY > 0 ? -0.1 : 0.1;
+    cbSetZoom(cbViewState.scale + delta, ev.clientX, ev.clientY);
+  }, { passive: false });
+
+  document.getElementById("cb-zoom-in").addEventListener("click", () => cbSetZoom(cbViewState.scale + 0.25));
+  document.getElementById("cb-zoom-out").addEventListener("click", () => cbSetZoom(cbViewState.scale - 0.25));
+  document.getElementById("cb-zoom-reset").addEventListener("click", cbResetView);
+})();
 
 // ---------------- BAŞLAT ----------------
 document.querySelectorAll("#cb-map-select-overlay [data-map]").forEach(btn => {
