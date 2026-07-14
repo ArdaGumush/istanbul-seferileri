@@ -27,8 +27,15 @@
 
   #cb-grid{ display:grid; }
   .cb-tile{ width:30px; height:30px; box-sizing:border-box; border:1px solid #05070b; position:relative; touch-action: manipulation; }
-  .cb-tile.floor{ background:#1d2330; }
-  .cb-tile.wall{ background:#3a3226; }
+  .cb-tile.floor{ background:#1d2330; background-size: cover; }
+  .cb-tile.floor-tex-1{ background-image: url('../texture/floor_1.png'); }
+  .cb-tile.floor-tex-2{ background-image: url('../texture/floor_2.png'); }
+  .cb-tile.floor-tex-3{ background-image: url('../texture/floor_3.png'); }
+  .cb-tile.floor-tex-4{ background-image: url('../texture/floor_4.png'); }
+  .cb-tile.wall{ background:#3a3226; background-size:cover; background-position:center; }
+  .cb-tile.wall-edge-left{ background-image: url('../texture/final_wall_leftedge.png'); }
+  .cb-tile.wall-edge-right{ background-image: url('../texture/final_wall_rightedge_rotated.png'); }
+  .cb-tile.wall-mid{ background-image: url('../texture/final_wall_midbrick.png'); }
   .cb-tile.obstacle{ background:#4a4438; }
   .cb-tile.door{ background:#5a4a35; }
   .cb-tile.entrance{ background:#7a3a2a; }

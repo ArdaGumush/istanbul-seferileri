@@ -41,14 +41,26 @@ let cbEnemyRosterTemplate = [];
 function cbPlaceEnemiesForAmbush() {
   const dirs = ["up", "down", "left", "right"];
   const count = cbEnemyRosterTemplate.length;
+  const MIN_DIST_FROM_ENTRANCE = 6; // giriş noktasının bu kadar kare uzağına kadar spawn yasak
 
   let spots;
   if (cbState.mapType === "hideout" && cbState.mapRooms && cbState.mapRooms.length > 0) {
-    // Her birim, farklı bir odaya rastgele düşürülür (odalar arası dağınık,
-    // ama her zaman bir odanın içinde - koridor/açık alanda değil).
+    // Girişe yeterince uzak odaları filtrele (oda merkezine göre mesafe hesabı)
+    const entrance = cbState.mapEntrance;
+    const eligibleRooms = cbState.mapRooms.filter(room => {
+      const roomCenterX = Math.round((room.x0 + room.x1) / 2);
+      const roomCenterY = Math.round((room.y0 + room.y1) / 2);
+      if (!entrance) return true;
+      const dist = Math.abs(roomCenterX - entrance.x) + Math.abs(roomCenterY - entrance.y);
+      return dist >= MIN_DIST_FROM_ENTRANCE;
+    });
+    const roomPool = eligibleRooms.length > 0 ? eligibleRooms : cbState.mapRooms; // hiçbiri uygun değilse fallback
+
+    // Her birim, farklı bir uygun odaya rastgele düşürülür (odalar arası dağınık,
+    // ama her zaman bir odanın içinde - koridor/açık alanda değil, girişten uzak).
     spots = [];
     for (let i = 0; i < count; i++) {
-      const room = cbState.mapRooms[Math.floor(Math.random() * cbState.mapRooms.length)];
+      const room = roomPool[Math.floor(Math.random() * roomPool.length)];
       const roomFloorTiles = [];
       for (let y = room.y0; y <= room.y1; y++) {
         for (let x = room.x0; x <= room.x1; x++) {
@@ -62,7 +74,7 @@ function cbPlaceEnemiesForAmbush() {
       }
     }
   } else {
-    spots = cbFindClusteredFloorTiles(count, 4);
+    spots = cbFindClusteredFloorTilesFromEntrance(count, MIN_DIST_FROM_ENTRANCE);
   }
 
   cbEnemyRosterTemplate.forEach((template, i) => {
@@ -199,6 +211,17 @@ function cbRenderGrid() {
       const isVisible = isPlacement ? true : visibleTiles.has(key);
       const el = document.createElement("div");
       el.className = "cb-tile " + tile + (isVisible ? "" : " hidden");
+      if (tile === "floor") {
+        // Konuma göre deterministik ama görsel olarak dağınık texture seçimi (1-4 arası)
+        const texIndex = ((x * 7 + y * 13) % 4) + 1;
+        el.className += " floor-tex-" + texIndex;
+      } else if (tile === "wall") {
+        // Duvarın haritadaki konumuna göre doğru yöne bakan texture varyantı seçilir:
+        // sol kenarda "dolu taraf sola", sağ kenarda "dolu taraf sağa" bakan tile kullanılır.
+        if (x === 0) el.className += " wall-edge-left";
+        else if (x === cbState.cols - 1) el.className += " wall-edge-right";
+        else el.className += " wall-mid";
+      }
       if (reachableSet.has(key)) el.className += " cb-reachable";
 
       // Yerleştirme aşamasında: giriş noktasına yakın boş floor kareleri, yerleştirilebilir olarak vurgulanır
