@@ -210,10 +210,10 @@ function cbRenderGrid() {
 
       el.dataset.x = x; el.dataset.y = y;
 
-      const unit = cbUnitAt(x, y);
-      if (unit && (isVisible || unit.side === "player" || unit.status === "fleeing" || unit.status === "fled")) {
+      const unit = cbAnyUnitAt(x, y);
+      if (unit && (isVisible || unit.side === "player" || unit.status === "fleeing" || unit.status === "fled" || unit.status === "dead")) {
         const marker = document.createElement("div");
-        marker.className = "cb-unit-marker " + unit.side + (unit.status === "down" ? " down" : "") + (cbState.selectedUnitId === unit.id ? " selected" : "");
+        marker.className = "cb-unit-marker " + unit.side + (unit.status === "down" ? " down" : "") + (unit.status === "dead" ? " dead" : "") + (cbState.selectedUnitId === unit.id ? " selected" : "");
         marker.textContent = unit.name;
         marker.title = unit.name;
         el.appendChild(marker);
@@ -290,7 +290,7 @@ function cbHandleTileClick(x, y, ev) {
   }
 
   if (cbMode === "loot") {
-    const target = cbUnitAt(x, y);
+    const target = cbAnyUnitAt(x, y);
     const dist = Math.abs(current.x - x) + Math.abs(current.y - y);
     if (!target || (target.status !== "dead" && target.status !== "down")) {
       cbLog("Sadece ölü ya da bayılmış birimlerin yanından malzeme alabilirsin.");
@@ -307,7 +307,7 @@ function cbHandleTileClick(x, y, ev) {
   }
 
   if (cbMode === "borrow-ammo") {
-    const target = cbUnitAt(x, y);
+    const target = cbAnyUnitAt(x, y);
     const dist = Math.abs(current.x - x) + Math.abs(current.y - y);
     if (!target || target.side !== current.side || target.status !== "down") {
       cbLog("Sadece bayılmış bir müttefikten mermi alabilirsin.");
@@ -871,9 +871,17 @@ function cbSetZoom(newScale, anchorX, anchorY) {
 }
 
 function cbResetView() {
+  const wrap = document.getElementById("cb-map-wrap");
+  const grid = document.getElementById("cb-grid");
   cbViewState.scale = 1;
-  cbViewState.panX = 0;
-  cbViewState.panY = 0;
+  if (wrap && grid && grid.offsetWidth) {
+    // Grid'i wrap içinde ortala (wrap'ten küçükse ortada, büyükse sol-üstten başlar)
+    cbViewState.panX = Math.max(0, (wrap.offsetWidth - grid.offsetWidth) / 2);
+    cbViewState.panY = Math.max(0, (wrap.offsetHeight - grid.offsetHeight) / 2);
+  } else {
+    cbViewState.panX = 0;
+    cbViewState.panY = 0;
+  }
   cbClampPan();
   cbApplyTransform();
 }
@@ -973,5 +981,7 @@ document.querySelectorAll("#cb-map-select-overlay [data-map]").forEach(btn => {
     cbLoadProceduralMap(btn.dataset.map, 20);
     cbSetupDemo();
     cbRefreshAll();
+    // Grid ilk kez DOM'a yerleşti, şimdi doğru boyutlarla ortalayabiliriz
+    setTimeout(cbResetView, 50);
   });
 });

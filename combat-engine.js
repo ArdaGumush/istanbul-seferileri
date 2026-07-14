@@ -159,8 +159,16 @@ function cbFindClusteredFloorTiles(count, minDistFromPlayers) {
 }
 
 // ---------------- BİRİM YÖNETİMİ ----------------
+// Sadece "aktif olarak orada duran" birimleri bulur (hareket engelleme, hedef seçimi için).
+// Ölü bedenler artık fiziksel bir engel değildir, bu yüzden burada sayılmaz.
 function cbUnitAt(x, y) {
   return cbState.units.find(u => u.x === x && u.y === y && u.status !== "dead" && u.status !== "fled");
+}
+
+// Ölü bedenler dahil, o karedeki HERHANGİ bir birimi bulur (loot/render için).
+// "fled" (kaçmayı tamamlamış) birimler hariç, çünkü onlar artık sahne dışı sayılır.
+function cbAnyUnitAt(x, y) {
+  return cbState.units.find(u => u.x === x && u.y === y && u.status !== "fled");
 }
 
 function cbLog(msg) {
