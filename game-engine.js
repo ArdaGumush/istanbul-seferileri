@@ -96,8 +96,20 @@ function initState() {
       lab: null, // { level }
     };
   });
-  // Oyuncuya başlangıç bölgesi ver
+  // Oyuncuya başlangıç bölgesi ver - "sıfırdan serseri" hikayesi: kendi evinde
+  // küçük bir uyuşturucu lab'ı zaten kurulu (ücretsiz, Level 1)
   state.districts["tarlabasi"].owner = "player";
+  state.districts["tarlabasi"].lab = { level: 1 };
+
+  // Başlangıç aracı: eski, biraz yıpranmış ama çalışan bir panelvan
+  const starterVehicle = VEHICLES.find(v => v.id === "panelvan");
+  state.garage.push({
+    id: uid(), vehicleTypeId: "panelvan",
+    durability: Math.round(starterVehicle.maxDurability * 0.7), // sıfırdan başlayan biri için biraz yıpranmış
+    status: "available", currentDistrictId: "tarlabasi",
+    plate: generatePlate(), flagged: false, replatedRecently: false,
+  });
+
   RIVAL_GANGS.forEach(g => {
     state.gangRelations[g.id] = { hostility: 20 };
     state.gangEconomy[g.id] = {
@@ -137,8 +149,10 @@ function initState() {
     });
   }
 
-  WEAPONS.forEach(w => { state.armory.weapons[w.id] = 0; });
-  ARMORS.forEach(a => { state.armory.armors[a.id] = 0; });
+  // Weapons/Armors artık adet değil, segment bazında "kilidi açık mı" + "dayanıklılık" tutuyor.
+  // Consumables hâlâ adet bazlı (sarf malzemesi mantığı bunu gerektiriyor).
+  WEAPONS.forEach(w => { state.armory.weapons[w.id] = { unlocked: false, durability: 100 }; });
+  ARMORS.forEach(a => { state.armory.armors[a.id] = { unlocked: false, durability: 100 }; });
   CONSUMABLES.forEach(c => { state.armory.consumables[c.id] = 0; });
 }
 
@@ -269,6 +283,10 @@ function renderTopbar() {
   document.getElementById("heat-bar-fill").style.width = state.heat + "%";
   document.getElementById("clock-day").textContent = state.day;
   document.getElementById("clock-time").textContent = fmtTime(state.minutes);
+
+  document.querySelectorAll(".speed-btn").forEach(b => {
+    b.classList.toggle("active", parseInt(b.dataset.speed, 10) === state.speed);
+  });
 }
 
 // ---------------- MAP RENDER ----------------
@@ -534,48 +552,77 @@ function openCounterOpPlanner(vehicleId, opKey) {
 
 function resolveCounterOp(op) {
   const v = state.vehicles.find(x => x.id === op.targetVehicleId);
-  op.crewIds.forEach(cid => {
-    const c = state.crew.find(x => x.id === cid);
-    if (c) c.assignedTo = null;
-  });
-
   const opDef = COUNTER_OPS[op.type];
+
   // Hedef araç hâlâ yolda değilse (zaten vardıysa) operasyon boşa gider
   if (!v || v.status !== "transit") {
+    op.crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
     toast("Hedef Kayboldu", `${opDef.name} için hedef zaten hedefine ulaşmış.`, "negative");
     return;
   }
 
-  const success = Math.random() * 100 < op.successChance;
   const gang = RIVAL_GANGS.find(g => g.id === v.faction);
+  const opCrew = op.crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
+  const playerCrew = opCrew.slice(0, 4).map(c => {
+    const weapon = cbDetermineCrewWeapon(c);
+    return {
+      gameCharacterId: c.id, name: c.name, weapon,
+      magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+      armorQuality: cbDetermineCrewArmor(c), attributes: c.attributes || null,
+      consumables: {},
+    };
+  });
 
-  if (success) {
-    v.status = "intercepted";
-    if (op.type === "ambush" && v.kind === "heist_escape") {
-      const stolen = Math.round((v.payout || 0) * (0.7 + Math.random()*0.3));
-      state.cash += stolen;
-      toast("Kaçış Aracı Durduruldu!", `${gang.name}'ın soygun parasından ${fmt(stolen)} çaldın.`, "positive");
-    } else if (op.type === "hijack" && v.kind === "shipment") {
-      state.materialStock[v.material] = (state.materialStock[v.material]||0) + v.amount;
-      toast("Nakliye Soyuldu!", `${gang.name}'dan ${v.amount} birim malzeme çaldın.`, "positive");
-    } else if (op.type === "kidnap") {
-      state.gangRelations[v.faction].hostility = Math.min(100, state.gangRelations[v.faction].hostility + 15);
-      const econ = state.gangEconomy[v.faction];
-      if (econ) econ.cash = Math.max(0, econ.cash - 5000);
-      toast("Operasyon Başarılı", `${gang.name}'ın adamları etkisiz hale getirildi.`, "positive");
-    }
-    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 10 * (state.modifiers.heatGainMult||1));
-  } else {
-    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 15 * (state.modifiers.heatGainMult||1));
-    state.gangRelations[v.faction].hostility = Math.min(100, state.gangRelations[v.faction].hostility + 10);
-    if (Math.random() < 0.3 && op.crewIds.length > 0) {
-      const lostId = op.crewIds[Math.floor(Math.random()*op.crewIds.length)];
-      state.crew = state.crew.filter(c => c.id !== lostId);
-      toast("Operasyon Başarısız", `${opDef.name} çöktü. Bir adamını kaybettin.`, "negative");
-    } else {
-      toast("Operasyon Başarısız", `${opDef.name} çöktü.`, "negative");
-    }
+  if (playerCrew.length === 0) {
+    op.crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
+    toast("Operasyon Başarısız", `${opDef.name} için ekip bulunamadı.`, "negative");
+    render();
+    return;
   }
+
+  const escortWeapons = ["tabanca_low", "makineli_low"];
+  const enemyRoster = escortWeapons.map((weapon, i) => ({
+    name: `${gang ? gang.name.split(" ")[0] : "Muhafız"} ${i + 1}`,
+    weapon, magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+    personality: "agresif",
+    armorQuality: null,
+  }));
+
+  state.speed = 0;
+  document.getElementById("cb-embedded-overlay").classList.add("active");
+  cbInitEmbedded({
+    mapType: "vehicleambush",
+    playerCrew,
+    enemyRoster,
+    ambushInitiator: "player",
+    onComplete: (result) => {
+      op.crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
+      applyCombatResultToGame(result,
+        () => {
+          v.status = "intercepted";
+          if (op.type === "ambush" && v.kind === "heist_escape") {
+            const stolen = Math.round((v.payout || 0) * (0.7 + Math.random() * 0.3));
+            state.cash += stolen;
+            toast("Kaçış Aracı Durduruldu!", `${gang.name}'ın soygun parasından ${fmt(stolen)} çaldın.`, "positive");
+          } else if (op.type === "hijack" && v.kind === "shipment") {
+            state.materialStock[v.material] = (state.materialStock[v.material] || 0) + v.amount;
+            toast("Nakliye Soyuldu!", `${gang.name}'dan ${v.amount} birim malzeme çaldın.`, "positive");
+          } else if (op.type === "kidnap") {
+            state.gangRelations[v.faction].hostility = Math.min(100, state.gangRelations[v.faction].hostility + 15);
+            const econ = state.gangEconomy[v.faction];
+            if (econ) econ.cash = Math.max(0, econ.cash - 5000);
+            toast("Operasyon Başarılı", `${gang.name}'ın adamları etkisiz hale getirildi.`, "positive");
+          }
+          state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 10 * (state.modifiers.heatGainMult || 1));
+        },
+        () => {
+          state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 15 * (state.modifiers.heatGainMult || 1));
+          state.gangRelations[v.faction].hostility = Math.min(100, state.gangRelations[v.faction].hostility + 10);
+          toast("Operasyon Başarısız", `${opDef.name} çöktü.`, "negative");
+        }
+      );
+    },
+  });
 }
 
 // Bir aracın rota üzerindeki mevcut konumunu (viewBox koordinatı) hesaplar
@@ -795,35 +842,163 @@ function buyDistrict(id) {
   render();
 }
 
-function attackDistrict(id) {
+// ============================================================
+// COMBAT KÖPRÜSÜ (Ana Oyun ↔ Gömülü Combat Sistemi)
+// ============================================================
+
+// Ana oyundaki bir ekip üyesinin silah type'ını combat'ın weapon id'sine çevirir.
+// Ana oyunda 3 segment (low/mid/high) var, combat şimdilik sadece _low kullanıyor.
+function cbMapWeaponIdToCombat(weaponType) {
+  const validTypes = ["tabanca", "pompali", "makineli", "tufek"];
+  const t = validTypes.includes(weaponType) ? weaponType : "tabanca";
+  return t + "_low";
+}
+
+// Bir crew üyesinin rolüne göre en uygun silahı belirler (asker alt-sınıflarına göre).
+// Bir crew üyesinin kullanacağı silahı belirler: önce kendi atanmış silahına
+// (loadout ekranından seçilmiş) bakar, yoksa rolüne göre varsayılan _low segmentine düşer.
+function cbDetermineCrewWeapon(crewMember) {
+  if (crewMember.assignedWeaponId && state.armory.weapons[crewMember.assignedWeaponId] &&
+      state.armory.weapons[crewMember.assignedWeaponId].unlocked &&
+      state.armory.weapons[crewMember.assignedWeaponId].durability > 0) {
+    return crewMember.assignedWeaponId;
+  }
+  if (crewMember.role === "asker_nisanci") return "tufek_low";
+  if (crewMember.role === "asker_agir_silahli") return "makineli_low";
+  if (crewMember.role === "asker_devriye") return "tabanca_low";
+  return "tabanca_low"; // savaşamayan roller de (sürücü vb.) tabanca ile temsil edilir
+}
+
+// Ana oyunun zırh id'lerini (yelek_hafif/orta/agir), combat'ın kalite sistemine
+// (hurdalik/standart/kaliteli/mukemmel) eşler.
+const CB_ARMOR_ID_MAP = {
+  yelek_hafif: "standart",
+  yelek_orta: "kaliteli",
+  yelek_agir: "mukemmel",
+};
+
+// Bir crew üyesinin kullanacağı zırhı belirler: kendi atanmış zırhı varsa (kilidi
+// açık, kırık değil) onu kullanır, yoksa zırhsız kalır.
+function cbDetermineCrewArmor(crewMember) {
+  if (crewMember.assignedArmorId && state.armory.armors[crewMember.assignedArmorId] &&
+      state.armory.armors[crewMember.assignedArmorId].unlocked &&
+      state.armory.armors[crewMember.assignedArmorId].durability > 0) {
+    return CB_ARMOR_ID_MAP[crewMember.assignedArmorId] || null;
+  }
+  return null;
+}
+
+// Ana oyunun crew listesinden, combat'ın beklediği playerCrew formatını üretir.
+// Sadece COMBAT_CAPABLE_ROLES içindeki (ve göreve atanmamış) üyeler alınır, en fazla 4 kişi.
+function buildCombatPlayerCrew() {
+  const available = state.crew.filter(c => COMBAT_CAPABLE_ROLES.includes(c.role) && !c.assignedTo);
+  const selected = available.slice(0, 4);
+  return selected.map(c => {
+    const weapon = cbDetermineCrewWeapon(c);
+    return {
+      gameCharacterId: c.id,
+      name: c.name,
+      weapon,
+      magAmmo: CB_WEAPONS[weapon].magSize,
+      spareMags: 1,
+      armorQuality: cbDetermineCrewArmor(c),
+      attributes: c.attributes || null,
+      consumables: {},
+    };
+  });
+}
+
+// Bir rakip çete için, gücüne (strength) göre 4 kişilik bir düşman roster'ı üretir.
+function buildCombatEnemyRoster(gang) {
+  const weapons = ["tabanca_low", "tabanca_low", "makineli_low", "pompali_low"];
+  const personalities = { agresif: "agresif", sinsi: "sinsi", savunmaci: "savunmaci" };
+  const gangPersonality = personalities[gang.personality] || "agresif";
+  return weapons.map((weapon, i) => ({
+    name: `${gang.name.split(" ")[0]} ${i + 1}`,
+    weapon,
+    magAmmo: CB_WEAPONS[weapon].magSize,
+    spareMags: 1,
+    personality: gangPersonality,
+    armorQuality: gang.strength > 6 ? "standart" : null,
+    sourceGangId: gang.id,
+  }));
+}
+
+// Combat sonucunu (cbBuildCombatResult formatı) ana oyunun state'ine uygular:
+// yaralanan/ölen crew üyelerini işler, kazandıysa çağırana bildirir.
+function applyCombatResultToGame(result, onWin, onLose) {
+  result.playerUnits.forEach(pu => {
+    const crewMember = state.crew.find(c => c.id === pu.gameCharacterId);
+    if (!crewMember) return;
+    if (pu.status === "dead") {
+      state.crew = state.crew.filter(c => c.id !== pu.gameCharacterId);
+      toast("Kayıp", `${pu.name} operasyonda hayatını kaybetti.`, "negative");
+    } else if (pu.status === "down" || pu.hp < 100) {
+      crewMember.injured = true;
+      crewMember.injuryHealAtMin = state.minutes + (3 * 24 * 60); // basitleştirilmiş: 3 gün iyileşme
+      toast("Yaralanma", `${pu.name} yaralandı, iyileşmesi zaman alacak.`, "negative");
+    }
+
+    // Silah/zırh yıpranması: savaşa katılmak silahı biraz, hasar almak zırhı daha çok yıpratır.
+    if (crewMember.assignedWeaponId && state.armory.weapons[crewMember.assignedWeaponId]) {
+      const wEntry = state.armory.weapons[crewMember.assignedWeaponId];
+      wEntry.durability = Math.max(0, wEntry.durability - (4 + Math.random() * 4)); // ~%4-8 aşınma
+    }
+    if (crewMember.assignedArmorId && state.armory.armors[crewMember.assignedArmorId]) {
+      const aEntry = state.armory.armors[crewMember.assignedArmorId];
+      const tookDamage = pu.hp < 100;
+      const wear = tookDamage ? 8 + Math.random() * 10 : 2 + Math.random() * 3; // hasar aldıysa çok, almadıysa az
+      aEntry.durability = Math.max(0, aEntry.durability - wear);
+    }
+  });
+
+  document.getElementById("cb-embedded-overlay").classList.remove("active");
+
+  if (result.won) { if (onWin) onWin(result); }
+  else { if (onLose) onLose(result); }
+  render();
+}
+
+// Bölge Saldırısı için combat'ı başlatır. Kazanma/kaybetme sonrası orijinal
+// attackDistrict mantığının geri kalanını (bölge sahipliği, ısı, ilişki) uygular.
+function launchDistrictCombat(id) {
   const d = districtById(id);
   const dObj = state.districts[id];
   const gangId = dObj.owner.split(":")[1];
   const gang = RIVAL_GANGS.find(g => g.id === gangId);
-  const combatCrew = state.crew.filter(c => COMBAT_CAPABLE_ROLES.includes(c.role));
-  const myStrength = combatCrew.length + 1;
-  // En yüksek Liderlik'e sahip savaşçı "komutan" gibi davranıp ekstra başarı bonusu sağlar
-  const bestLeadership = combatCrew.reduce((max, c) => {
-    const lead = c.attributes ? c.attributes.liderlik : 8;
-    return Math.max(max, lead);
-  }, 8);
-  const leadershipBonus = (bestLeadership - 8) * 0.8; // 8 nötr taban, üstü küçük bonus
-  const effectiveRivalStrength = gang.strength * (state.modifiers.rivalStrengthMult || 1);
-  let successChance = Math.min(85, Math.max(10, 50 + (myStrength - effectiveRivalStrength) * 12 + leadershipBonus));
-  successChance += (state.modifiers.attackSuccessBonus || 0);
-  successChance = Math.min(95, successChance);
-  const success = Math.random() * 100 < successChance;
 
-  if (success) {
-    dObj.owner = "player";
-    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 12 * (state.modifiers.heatGainMult || 1));
-    toast("Saldırı Başarılı!", `${d.name} artık senin. ${gang.name} geri çekildi.`, "positive");
-  } else {
-    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 20 * (state.modifiers.heatGainMult || 1));
-    state.gangRelations[gangId].hostility = Math.min(100, state.gangRelations[gangId].hostility + 20 * (state.modifiers.hostilityGainMult || 1));
-    toast("Saldırı Başarısız", `${d.name} alınamadı. ${gang.name} misilleme yapabilir.`, "negative");
+  const playerCrew = buildCombatPlayerCrew();
+  if (playerCrew.length === 0) {
+    toast("Yetersiz Ekip", "Saldırı için en az bir savaşçın olmalı.", "negative");
+    return;
   }
-  render();
+  const enemyRoster = buildCombatEnemyRoster(gang);
+
+  document.getElementById("cb-embedded-overlay").classList.add("active");
+  cbInitEmbedded({
+    mapType: "alley",
+    playerCrew,
+    enemyRoster,
+    ambushInitiator: "player",
+    onComplete: (result) => {
+      applyCombatResultToGame(result,
+        () => {
+          dObj.owner = "player";
+          state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 12 * (state.modifiers.heatGainMult || 1));
+          toast("Saldırı Başarılı!", `${d.name} artık senin. ${gang.name} geri çekildi.`, "positive");
+        },
+        () => {
+          state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 20 * (state.modifiers.heatGainMult || 1));
+          state.gangRelations[gangId].hostility = Math.min(100, state.gangRelations[gangId].hostility + 20 * (state.modifiers.hostilityGainMult || 1));
+          toast("Saldırı Başarısız", `${d.name} alınamadı. ${gang.name} misilleme yapabilir.`, "negative");
+        }
+      );
+    },
+  });
+}
+
+function attackDistrict(id) {
+  launchDistrictCombat(id);
 }
 
 function buildBusiness(districtId, typeId) {
@@ -1203,29 +1378,152 @@ function closeModal() {
 
 function resolveHeist(heist) {
   const target = HEIST_TARGETS.find(t => t.id === heist.targetId);
-  const success = Math.random() * 100 < heist.successChance;
 
-  heist.crewIds.forEach(cid => {
-    const c = state.crew.find(x => x.id === cid);
-    if (c) c.assignedTo = null;
+  const heistCrew = heist.crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
+  const playerCrew = heistCrew.slice(0, 4).map(c => {
+    const weapon = cbDetermineCrewWeapon(c);
+    return {
+      gameCharacterId: c.id, name: c.name, weapon,
+      magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+      armorQuality: cbDetermineCrewArmor(c), attributes: c.attributes || null,
+      consumables: {},
+    };
   });
 
-  if (success) {
-    const payout = Math.round(target.payout[0] + Math.random() * (target.payout[1] - target.payout[0]));
-    state.cash += payout;
-    state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + target.heatOnSuccess);
-    toast("Soygun Başarılı!", `${target.name}: ${fmt(payout)} kazandın.`, "positive");
-  } else {
+  if (playerCrew.length === 0) {
+    // Ekip kalmadıysa (hepsi başka yere atanmış/kovulmuş) otomatik başarısız say
+    heist.crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
     state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + target.heatOnFail);
-    // %25 ihtimalle bir ekip üyesi kaybedilir
-    if (Math.random() < 0.25 && heist.crewIds.length > 0) {
-      const lostId = heist.crewIds[Math.floor(Math.random() * heist.crewIds.length)];
-      state.crew = state.crew.filter(c => c.id !== lostId);
-      toast("Soygun Başarısız!", `${target.name} çöktü. Bir adamını kaybettin.`, "negative");
-    } else {
-      toast("Soygun Başarısız!", `${target.name} çöktü. Isı ciddi arttı.`, "negative");
-    }
+    toast("Soygun Başarısız!", `${target.name} için ekip bulunamadı.`, "negative");
+    render();
+    return;
   }
+
+  // Hedefin güvenlik gücüne göre (baseSuccess'in tersine orantılı) bir "güvenlik" roster'ı üret
+  const guardCount = Math.max(2, Math.min(4, Math.round((100 - heist.successChance) / 20)));
+  const guardWeapons = ["tabanca_low", "tabanca_low", "makineli_low", "pompali_low"];
+  const enemyRoster = Array.from({ length: guardCount }, (_, i) => ({
+    name: `Güvenlik ${i + 1}`,
+    weapon: guardWeapons[i % guardWeapons.length],
+    magAmmo: CB_WEAPONS[guardWeapons[i % guardWeapons.length]].magSize,
+    spareMags: 1,
+    personality: "savunmaci",
+    armorQuality: target.difficulty >= 2 ? "standart" : null,
+  }));
+
+  const heistMapTypes = ["kuyumcu", "banka_subesi", "ozel_sergi"];
+  const heistMapType = heistMapTypes.includes(target.id) ? target.id : "hideout"; // henüz özel şablonu olmayan hedefler için
+  const isRealHeistMap = heistMapTypes.includes(target.id);
+
+  // Zorluk seviyesini hedefin difficulty alanından (1-4) heist-difficulty'e çeviriyoruz
+  const heistDifficulty = target.difficulty <= 1 ? "kolay" : target.difficulty <= 3 ? "orta" : "zor";
+  const totalHaul = Math.round(target.payout[0] + Math.random() * (target.payout[1] - target.payout[0]));
+
+  state.speed = 0; // hazırlanan operasyon vakti geldi, oyun zamanı duraklar
+  document.getElementById("cb-embedded-overlay").classList.add("active");
+  cbInitEmbedded({
+    mapType: heistMapType,
+    playerCrew,
+    enemyRoster,
+    ambushInitiator: "player",
+    heistConfig: isRealHeistMap ? {
+      difficulty: heistDifficulty,
+      totalHaul,
+    } : null,
+    onComplete: (result) => {
+      heist.crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
+      applyCombatResultToGame(result,
+        () => {
+          const extracted = result.heistExtractedTotal || 0;
+          state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + target.heatOnSuccess);
+          triggerExtractionAmbushCheck(extracted, target, () => {
+            if (extracted > 0) {
+              toast("Soygun Başarılı!", `${target.name}: ${fmt(extracted)} güvenli bölgeye ulaştırdın.`, "positive");
+            } else {
+              toast("Soygun Yarım Kaldı", `${target.name}: Düşmanlar temizlendi ama ganimet çıkarılamadı.`, "negative");
+            }
+          });
+        },
+        () => {
+          state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + target.heatOnFail);
+          toast("Soygun Başarısız!", `${target.name} çöktü. Isı ciddi arttı.`, "negative");
+        }
+      );
+    },
+  });
+}
+
+// Heist başarıyla tamamlandıktan sonra, ekip hideout'a dönerken rakip çete ya da
+// polis tarafından pusuya düşürülme ihtimalini kontrol eder. Isı seviyesi arttıkça
+// bu ihtimal yükselir. Tetiklenirse gerçek bir Araç Pusu combat'ı açılır; oyuncu bu
+// ikinci savaşı kaybederse taşınan paranın bir kısmı kaybedilir.
+function triggerExtractionAmbushCheck(extractedAmount, target, onSafeArrival) {
+  // Taban %15 ihtimal, ısı arttıkça yükselir (ısı 100'de +%25 ekstra, toplam %40'a kadar)
+  const ambushChance = 15 + (state.heat / 100) * 25;
+  const triggered = Math.random() * 100 < ambushChance;
+
+  if (!triggered || extractedAmount <= 0) {
+    // Pusu yok, ya da zaten taşınan para yoksa risk edilecek bir şey yok - direkt eve varır
+    state.cash += extractedAmount;
+    onSafeArrival();
+    render();
+    return;
+  }
+
+  toast("Dönüş Yolunda Tehlike", "Hideout'a dönerken pusu kurulmuş olabilir!", "negative");
+
+  // Dönüş yolu için kaba bir düşman roster'ı (kim pusu kurduğu belirsiz - genel "sokak" tehdidi)
+  const ambushWeapons = ["tabanca_low", "tabanca_low", "makineli_low"];
+  const enemyRoster = ambushWeapons.map((weapon, i) => ({
+    name: `Sokak Çetesi ${i + 1}`,
+    weapon, magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+    personality: "agresif", armorQuality: null,
+  }));
+
+  // Extraction'ı başaran ekip üyelerinden (ölmemiş/bayılmamış olanlardan) devam
+  // eden karakterleri alıyoruz - bu bilgi zaten crew listesinde mevcut.
+  const survivingCrew = state.crew.filter(c => !c.assignedTo).slice(0, 4);
+  const playerCrew = survivingCrew.map(c => {
+    const weapon = cbDetermineCrewWeapon(c);
+    return {
+      gameCharacterId: c.id, name: c.name, weapon,
+      magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+      armorQuality: cbDetermineCrewArmor(c), attributes: c.attributes || null,
+      consumables: {},
+    };
+  });
+
+  if (playerCrew.length === 0) {
+    // Ekip zaten yoksa (hepsi düşmüş) pusu anlamsız, direkt sonuçlan
+    state.cash += extractedAmount;
+    onSafeArrival();
+    render();
+    return;
+  }
+
+  document.getElementById("cb-embedded-overlay").classList.add("active");
+  cbInitEmbedded({
+    mapType: "vehicleambush",
+    playerCrew,
+    enemyRoster,
+    ambushInitiator: "enemy", // dönüş yolunda pusuya DÜŞÜLÜYOR, initiator düşman
+    onComplete: (result) => {
+      applyCombatResultToGame(result,
+        () => {
+          state.cash += extractedAmount;
+          toast("Pusu Atlatıldı!", `${fmt(extractedAmount)} güvenle hideout'a ulaştı.`, "positive");
+          onSafeArrival();
+        },
+        () => {
+          // Pusu kaybedildi: taşınan paranın yarısı yolda kaybedilir
+          const lost = Math.round(extractedAmount * 0.5);
+          const salvaged = extractedAmount - lost;
+          state.cash += salvaged;
+          toast("Pusuda Kayıp!", `${fmt(lost)} pusu sırasında kayboldu, ${fmt(salvaged)} kurtarılabildi.`, "negative");
+        }
+      );
+    },
+  });
 }
 
 // ---------------- TAB: SİLAHLAR (Satıcı + Karaborsa) ----------------
@@ -1238,14 +1536,32 @@ function renderArmoryTab() {
     <div class="section-label">Envanterin</div>
     <div class="card">
   `;
-  const ownedWeapons = WEAPONS.filter(w => state.armory.weapons[w.id] > 0);
-  const ownedArmors = ARMORS.filter(a => state.armory.armors[a.id] > 0);
+  const ownedWeapons = WEAPONS.filter(w => state.armory.weapons[w.id] && state.armory.weapons[w.id].unlocked);
+  const ownedArmors = ARMORS.filter(a => state.armory.armors[a.id] && state.armory.armors[a.id].unlocked);
   const ownedConsumables = CONSUMABLES.filter(c => state.armory.consumables[c.id] > 0);
   if (ownedWeapons.length === 0 && ownedArmors.length === 0 && ownedConsumables.length === 0) {
     html += `<div class="card-desc" style="margin-bottom:0;">Henüz hiç silah/zırh/malzemen yok.</div>`;
   } else {
-    ownedWeapons.forEach(w => { html += `<div class="card-row"><span class="card-stat">${w.name}</span><span class="card-stat gold"><span class="num">${state.armory.weapons[w.id]}</span> adet</span></div>`; });
-    ownedArmors.forEach(a => { html += `<div class="card-row"><span class="card-stat">${a.name}</span><span class="card-stat gold"><span class="num">${state.armory.armors[a.id]}</span> adet</span></div>`; });
+    ownedWeapons.forEach(w => {
+      const dur = state.armory.weapons[w.id].durability;
+      const durColor = dur < 30 ? "blood" : dur < 70 ? "" : "gold";
+      html += `
+        <div class="card-row">
+          <span class="card-stat">${w.name}</span>
+          <span class="card-stat ${durColor}">Dayanıklılık: <span class="num">%${Math.round(dur)}</span></span>
+          ${dur < 100 ? `<button class="btn btn-outline btn-sm" data-repair="weapons:${w.id}">Tamir Et (${fmt(cbRepairCost(w.priceShop, dur))})</button>` : ""}
+        </div>`;
+    });
+    ownedArmors.forEach(a => {
+      const dur = state.armory.armors[a.id].durability;
+      const durColor = dur < 30 ? "blood" : dur < 70 ? "" : "gold";
+      html += `
+        <div class="card-row">
+          <span class="card-stat">${a.name}</span>
+          <span class="card-stat ${durColor}">Dayanıklılık: <span class="num">%${Math.round(dur)}</span></span>
+          ${dur < 100 ? `<button class="btn btn-outline btn-sm" data-repair="armors:${a.id}">Tamir Et (${fmt(cbRepairCost(a.priceShop, dur))})</button>` : ""}
+        </div>`;
+    });
     ownedConsumables.forEach(c => { html += `<div class="card-row"><span class="card-stat">${c.name}</span><span class="card-stat gold"><span class="num">${state.armory.consumables[c.id]}</span> adet</span></div>`; });
   }
   html += `</div>`;
@@ -1284,18 +1600,26 @@ function renderArmoryTab() {
     const [category, itemId] = b.dataset.buyShop.split("|");
     buyFromShop(category, itemId);
   }));
+  el.querySelectorAll("[data-repair]").forEach(b => b.addEventListener("click", () => {
+    const [category, itemId] = b.dataset.repair.split(":");
+    repairArmoryItem(category, itemId);
+  }));
   el.querySelectorAll("[data-smuggle]").forEach(b => b.addEventListener("click", () => smuggleListing(b.dataset.smuggle)));
 }
 
 function renderShopCategory(title, items, category) {
   let html = `<div class="card"><div class="card-title" style="margin-bottom:8px;">${title}</div>`;
   items.forEach(item => {
+    const isAmmoLike = category === "consumables";
+    const alreadyUnlocked = !isAmmoLike && state.armory[category][item.id] && state.armory[category][item.id].unlocked;
     html += `
       <div class="card-row">
         <span class="card-stat">${item.name}</span>
         <span style="display:flex; align-items:center; gap:8px;">
           <span class="card-stat gold"><span class="num">${fmt(item.priceShop)}</span></span>
-          <button class="btn btn-outline btn-sm" data-buy-shop="${category}|${item.id}" ${state.cash < item.priceShop ? "disabled" : ""}>Satın Al</button>
+          ${alreadyUnlocked
+            ? `<span class="card-stat gold">Sahipsin</span>`
+            : `<button class="btn btn-outline btn-sm" data-buy-shop="${category}|${item.id}" ${state.cash < item.priceShop ? "disabled" : ""}>Satın Al</button>`}
         </span>
       </div>
     `;
@@ -1311,11 +1635,35 @@ function findArmoryItem(itemType, itemId) {
   return null;
 }
 
+// Tamir maliyeti: kayıp dayanıklılık oranına göre, item'ın orijinal fiyatının bir kısmı.
+// %0 dayanıklılık (tam kırık) tamir etmek, orijinal fiyatın %60'ı kadar tutar.
+function cbRepairCost(originalPrice, currentDurability) {
+  const missingRatio = (100 - currentDurability) / 100;
+  return Math.round(originalPrice * missingRatio * 0.6);
+}
+
+function repairArmoryItem(category, itemId) {
+  const item = findArmoryItem(category, itemId);
+  const entry = state.armory[category][itemId];
+  if (!item || !entry || entry.durability >= 100) return;
+  const cost = cbRepairCost(item.priceShop, entry.durability);
+  if (state.cash < cost) { toast("Yetersiz Bakiye", "Tamir için yeterli paran yok.", "negative"); return; }
+  state.cash -= cost;
+  entry.durability = 100;
+  toast("Tamir Edildi", `${item.name} tam dayanıklılığa kavuştu.`, "positive");
+  render();
+}
+
 function buyFromShop(category, itemId) {
   const item = findArmoryItem(category, itemId);
   if (!item || state.cash < item.priceShop) return;
   state.cash -= item.priceShop;
-  state.armory[category][itemId] = (state.armory[category][itemId] || 0) + 1;
+  if (category === "consumables") {
+    state.armory[category][itemId] = (state.armory[category][itemId] || 0) + 1;
+  } else {
+    // weapons/armors: adet değil, "kilidi aç" + dayanıklılığı tam doldur
+    state.armory[category][itemId] = { unlocked: true, durability: 100 };
+  }
   toast("Satın Alındı", `${item.name} envanterine eklendi.`, "positive");
   render();
 }
@@ -1571,6 +1919,29 @@ function renderCrewTab() {
         html += `<div class="card-desc">Araç gerektiren operasyonlarda başarı şansını artırır.</div>`;
       }
 
+      if (COMBAT_CAPABLE_ROLES.includes(c.role)) {
+        const unlockedWeapons = WEAPONS.filter(w => state.armory.weapons[w.id] && state.armory.weapons[w.id].unlocked);
+        const unlockedArmors = ARMORS.filter(a => state.armory.armors[a.id] && state.armory.armors[a.id].unlocked);
+        html += `<div class="card-stat" style="margin-top:8px;">Silah:</div>`;
+        html += `<select data-assign-weapon="${c.id}" style="width:100%; margin-bottom:6px;">`;
+        html += `<option value="">— Varsayılan (Standart) —</option>`;
+        unlockedWeapons.forEach(w => {
+          const dur = state.armory.weapons[w.id].durability;
+          const selected = c.assignedWeaponId === w.id ? "selected" : "";
+          html += `<option value="${w.id}" ${selected} ${dur <= 0 ? "disabled" : ""}>${w.name} (%${Math.round(dur)})</option>`;
+        });
+        html += `</select>`;
+        html += `<div class="card-stat">Zırh:</div>`;
+        html += `<select data-assign-armor="${c.id}" style="width:100%;">`;
+        html += `<option value="">— Zırhsız —</option>`;
+        unlockedArmors.forEach(a => {
+          const dur = state.armory.armors[a.id].durability;
+          const selected = c.assignedArmorId === a.id ? "selected" : "";
+          html += `<option value="${a.id}" ${selected} ${dur <= 0 ? "disabled" : ""}>${a.name} (%${Math.round(dur)})</option>`;
+        });
+        html += `</select>`;
+      }
+
       html += `<button class="btn btn-outline btn-sm" style="margin-top:8px;" data-fire="${c.id}">İşten Çıkar</button>`;
       html += `</div>`;
     });
@@ -1592,6 +1963,14 @@ function renderCrewTab() {
   el.innerHTML = html;
   el.querySelectorAll("[data-fire]").forEach(b => b.addEventListener("click", () => fireCrew(b.dataset.fire)));
   el.querySelectorAll("[data-show-attrs]").forEach(b => b.addEventListener("click", () => showCrewAttributes(b.dataset.showAttrs)));
+  el.querySelectorAll("[data-assign-weapon]").forEach(sel => sel.addEventListener("change", () => {
+    const c = state.crew.find(x => x.id === sel.dataset.assignWeapon);
+    if (c) c.assignedWeaponId = sel.value || null;
+  }));
+  el.querySelectorAll("[data-assign-armor]").forEach(sel => sel.addEventListener("change", () => {
+    const c = state.crew.find(x => x.id === sel.dataset.assignArmor);
+    if (c) c.assignedArmorId = sel.value || null;
+  }));
   el.querySelectorAll("[data-assign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.assign)));
   el.querySelectorAll("[data-reassign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.reassign)));
   el.querySelectorAll("[data-recruit]").forEach(b => b.addEventListener("click", () => recruitCrew(b.dataset.recruit)));
@@ -2320,41 +2699,62 @@ function openHideoutRaidPlanner(gangId) {
       toast("Ekip Eksik", "Tüm rolleri doldurmalısın.", "negative");
       return;
     }
-    let successChance = op.baseSuccess + (state.modifiers.heistSuccessBonus || 0);
-    crewIds.forEach(cid => {
-      const c = state.crew.find(x => x.id === cid);
-      c.assignedTo = "hideoutraid:" + gangId;
-      successChance += Math.round(c.loyalty / 20);
-      if (c.role === "surucu") successChance += 8;
-    });
-    successChance = Math.min(85, successChance);
-
-    const success = Math.random() * 100 < successChance;
-    crewIds.forEach(cid => {
-      const c = state.crew.find(x => x.id === cid);
-      if (c) c.assignedTo = null;
+    const raidCrew = crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
+    const playerCrew = raidCrew.slice(0, 4).map(c => {
+      const weapon = cbDetermineCrewWeapon(c);
+      return {
+        gameCharacterId: c.id, name: c.name, weapon,
+        magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 2,
+        armorQuality: cbDetermineCrewArmor(c), attributes: c.attributes || null,
+        consumables: { sersemletici: 1, kirilma_sarji: 1 }, // en riskli operasyon, ekstra donanım
+      };
     });
 
-    if (success) {
-      const econ = state.gangEconomy[gangId];
-      const stolen = econ ? econ.cash : 0;
-      state.cash += stolen;
-      if (econ) econ.cash = 0;
-      state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 30 * (state.modifiers.heatGainMult||1));
-      state.gangRelations[gangId].hostility = Math.min(100, state.gangRelations[gangId].hostility + 35);
-      toast("Baskın Başarılı!", `${gang.name}'ın hideout'undan ${fmt(stolen)} ele geçirdin.`, "positive");
-    } else {
-      state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 40 * (state.modifiers.heatGainMult||1));
-      if (Math.random() < 0.4 && crewIds.length > 0) {
-        const lostId = crewIds[Math.floor(Math.random()*crewIds.length)];
-        state.crew = state.crew.filter(c => c.id !== lostId);
-        toast("Baskın Başarısız!", `${gang.name} seni geri püskürttü. Bir adamını kaybettin.`, "negative");
-      } else {
-        toast("Baskın Başarısız!", `${gang.name} seni geri püskürttü.`, "negative");
-      }
+    if (playerCrew.length === 0) {
+      toast("Ekip Eksik", "Baskın için uygun ekip bulunamadı.", "negative");
+      return;
     }
+
+    crewIds.forEach(cid => {
+      const c = state.crew.find(x => x.id === cid);
+      if (c) c.assignedTo = "hideoutraid:" + gangId;
+    });
+
+    const guardWeapons = ["makineli_low", "tabanca_low", "tufek_low", "pompali_low", "tabanca_low"];
+    const enemyRoster = guardWeapons.map((weapon, i) => ({
+      name: `${gang.name.split(" ")[0]} Muhafız ${i + 1}`,
+      weapon, magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+      personality: i % 2 === 0 ? "agresif" : "savunmaci",
+      armorQuality: "standart",
+    }));
+
     closeModal();
-    render();
+    state.speed = 0;
+    document.getElementById("cb-embedded-overlay").classList.add("active");
+    cbInitEmbedded({
+      mapType: "hideout",
+      playerCrew,
+      enemyRoster,
+      ambushInitiator: "player",
+      onComplete: (result) => {
+        crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
+        applyCombatResultToGame(result,
+          () => {
+            const econ = state.gangEconomy[gangId];
+            const stolen = econ ? econ.cash : 0;
+            state.cash += stolen;
+            if (econ) econ.cash = 0;
+            state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 30 * (state.modifiers.heatGainMult || 1));
+            state.gangRelations[gangId].hostility = Math.min(100, state.gangRelations[gangId].hostility + 35);
+            toast("Baskın Başarılı!", `${gang.name}'ın hideout'undan ${fmt(stolen)} ele geçirdin.`, "positive");
+          },
+          () => {
+            state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + 40 * (state.modifiers.heatGainMult || 1));
+            toast("Baskın Başarısız!", `${gang.name} seni geri püskürttü.`, "negative");
+          }
+        );
+      },
+    });
   });
 
   backdrop.classList.add("open");
@@ -2485,7 +2885,12 @@ function gameTick() {
         if (gv) { gv.status = "available"; gv.currentDistrictId = v.toId; }
       }
     } else if (v.faction === "player" && v.kind === "weapon_smuggle") {
-      state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + v.amount;
+      if (v.itemType === "consumables") {
+        state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + v.amount;
+      } else {
+        // weapons/armors: kaçak sevkiyat da segmentin kilidini açar (miktar önemsiz, adet tutulmuyor)
+        state.armory[v.itemType][v.itemId] = { unlocked: true, durability: 100 };
+      }
       const item = findArmoryItem(v.itemType, v.itemId);
       logEvent(`Kaçak sevkiyat ulaştı: ${item.name} x${v.amount}.`);
       toast("Kaçakçılık Başarılı", `${item.name} envanterine eklendi.`, "positive");
@@ -2531,17 +2936,21 @@ function gameTick() {
     }
   });
 
-  // Soygun kontrolü
-  state.activeHeists.forEach(h => {
-    if (state.minutes >= h.finishesAtMin) resolveHeist(h);
-  });
-  state.activeHeists = state.activeHeists.filter(h => state.minutes < h.finishesAtMin);
+  // Soygun kontrolü - aynı anda birden fazlası bitmişse bile sadece ilkini işleriz,
+  // combat açıldığı an state.speed=0 olacağı için gameTick zaten duracak.
+  const dueHeist = state.activeHeists.find(h => state.minutes >= h.finishesAtMin);
+  if (dueHeist) {
+    state.activeHeists = state.activeHeists.filter(h => h !== dueHeist);
+    resolveHeist(dueHeist);
+  }
 
-  // Karşı-operasyon kontrolü (rakip araçlarına pusu/soygun/kaçırma)
-  state.activeCounterOps.forEach(op => {
-    if (state.minutes >= op.finishesAtMin) resolveCounterOp(op);
-  });
-  state.activeCounterOps = state.activeCounterOps.filter(op => state.minutes < op.finishesAtMin);
+  // Karşı-operasyon kontrolü (rakip araçlarına pusu/soygun/kaçırma) - aynı anda
+  // birden fazlası bitmişse sadece ilkini işleriz, combat açılınca zaman zaten duracak.
+  const dueOp = state.activeCounterOps.find(op => state.minutes >= op.finishesAtMin);
+  if (dueOp) {
+    state.activeCounterOps = state.activeCounterOps.filter(op => op !== dueOp);
+    resolveCounterOp(dueOp);
+  }
 
   // Baskın riski (yüksek ısıda rastgele gelir kaybı)
   if (state.heat >= GAME_CONSTANTS.raidHeatThreshold && Math.random() < 0.02 * state.speed) {

@@ -594,9 +594,205 @@
     width:28px; height:28px;
   }
   .close-x:hover{ color: var(--ink); }
+
+/* ===== COMBAT (Bölge Saldırısı vb.) EMBEDDED STİLLERİ ===== */
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Oswald:wght@400;500;600&display=swap');
+  #cb-embedded-overlay *{ box-sizing:border-box; }
+  #cb-embedded-overlay{
+    margin:0; background:#0a0d14; color:#e8e6df;
+    font-family:'Oswald', sans-serif;
+    display:none; grid-template-columns: 180px 1fr 180px; grid-template-rows: 1fr 220px;
+    position:fixed; inset:0; z-index:500;
+    gap:8px; padding:8px;
+    overflow: hidden;
+  }
+  #cb-embedded-overlay.active{ display:grid; }
+  #cb-left, #cb-right{
+    background:#12161f; border:1px solid #2a3142; border-radius:8px;
+    padding:8px; overflow-y:auto; grid-row: 1;
+  }
+  #cb-left{ grid-column:1; }
+  #cb-right{ grid-column:3; }
+  #cb-map-wrap{ grid-column:2; grid-row:1; background:#05070b; border:1px solid #2a3142; border-radius:8px; overflow:hidden; touch-action:none; position:relative; }
+  #cb-grid-container{ position:absolute; top:0; left:0; transform-origin: 0 0; will-change: transform; }
+  #cb-zoom-controls{ position:absolute; bottom:8px; right:8px; z-index:10; display:flex; flex-direction:column; gap:4px; }
+  #cb-zoom-controls button{ width:34px; height:34px; padding:0; font-size:16px; font-weight:600; }
+  #cb-bottom{ grid-column:1/4; grid-row:2; background:#12161f; border:1px solid #2a3142; border-radius:8px; padding:10px; display:flex; gap:12px; max-height: 45vh; overflow-y: auto; }
+
+  #cb-grid{ display:grid; }
+  .cb-tile{ width:30px; height:30px; box-sizing:border-box; border:1px solid #05070b; position:relative; touch-action: manipulation; }
+  .cb-tile.floor{ background:#1d2330; background-size: cover; }
+  .cb-tile.floor-tex-1{ background-image: url('texture/floor_1.png'); }
+  .cb-tile.floor-tex-2{ background-image: url('texture/floor_2.png'); }
+  .cb-tile.floor-tex-3{ background-image: url('texture/floor_3.png'); }
+  .cb-tile.floor-tex-4{ background-image: url('texture/floor_4.png'); }
+  .cb-tile.wall{ background:#3a3226; background-size:cover; background-position:center; }
+
+  /* Gemini duvar/zemin seti - köşe/kenar mantıklı, koyu tema */
+  .cb-tile.gfloor{ background-image: url('texture/gemini/floor_plain.png'); background-size:cover; }
+  .cb-tile.wall-edge-left{ background-image: url('texture/final_wall_leftedge.png'); }
+  .cb-tile.wall-edge-right{ background-image: url('texture/final_wall_rightedge_rotated.png'); }
+  .cb-tile.wall-mid{ background-image: url('texture/final_wall_midbrick.png'); }
+  .cb-tile.obstacle{ background:#4a4438; }
+  .cb-tile.door{ background:#5a4a35; }
+  .cb-tile.entrance{ background:#7a3a2a; }
+  .cb-tile.vault_door{ background:#c9a24b; }
+  .cb-tile.treasure{ background:#8b6538; }
+  .cb-breach-marker{
+    position:absolute; inset:6px; border-radius:3px;
+    background:#d4453d; opacity:0.85;
+    animation: cb-breach-pulse 1s ease-in-out infinite;
+  }
+  @keyframes cb-breach-pulse{
+    0%, 100%{ opacity:0.5; }
+    50%{ opacity:0.95; }
+  }
+  .cb-tile.hidden{ filter: brightness(0.55) saturate(0.5); }
+  .cb-tile.visible-empty{ filter:brightness(1.15); }
+
+  .cb-unit-marker{
+    position:absolute; inset:2px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:9px; font-weight:600; cursor:pointer;
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .cb-unit-marker.player{ background:#c9a24b; color:#0a0d14; }
+  .cb-unit-marker.enemy{ background:#a5342e; color:#e8e6df; }
+  .cb-unit-marker.down{ opacity:0.4; }
+  .cb-unit-marker.dead{ background:#1a1a1a !important; opacity:0.7; border:1px solid #444; }
+  .cb-unit-marker.selected{ outline:2px solid #e6c368; }
+
+  .cb-dir-arrow{ position:absolute; width:0; height:0; }
+
+  .cb-reachable{ outline: 2px solid #4a9c5d; outline-offset: -2px; cursor:pointer; background:rgba(74,156,93,0.12) !important; }
+  .cb-placeable{ outline: 2px solid #2980b9; outline-offset: -2px; cursor:pointer; background:rgba(41,128,185,0.15) !important; }
+
+  #cb-placement-panel{ display:none; }
+  #cb-placement-panel.active{ display:block; }
+  .cb-roster-item{
+    background:#1d2330; border:1px solid #2a3142; border-radius:6px;
+    padding:6px 8px; margin-bottom:6px; cursor:pointer; font-size:11px;
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .cb-roster-item.picking{ border-color:#2980b9; background:rgba(41,128,185,0.15); }
+  .cb-roster-item.placed{ opacity:0.5; }
+
+  .cb-laser-line{ stroke-linecap: round; opacity: 0; }
+  .cb-laser-line.firing{ animation: cb-laser-fade 0.5s ease-out forwards; }
+  @keyframes cb-laser-fade{
+    0%{ opacity: 1; }
+    70%{ opacity: 0.9; }
+    100%{ opacity: 0; }
+  }
+  .cb-vision{ box-shadow: inset 0 0 0 1px rgba(230,195,104,0.3); }
+
+  .cb-unit-card{
+    background:#1d2330; border:1px solid #2a3142; border-radius:6px;
+    padding:6px 8px; margin-bottom:6px; cursor:pointer; font-size:11px;
+    font-family:'IBM Plex Mono', monospace;
+  }
+  .cb-unit-card.current{ border-color:#c9a24b; }
+  .cb-unit-card .name{ font-weight:600; margin-bottom:3px; }
+  .cb-unit-card .hpbar{ height:4px; background:#05070b; border-radius:2px; overflow:hidden; margin:3px 0; }
+  .cb-unit-card .hpfill{ height:100%; background:#a5342e; }
+
+  #cb-popover{
+    position:fixed; z-index:50; background:#181d29; border:1px solid #c9a24b;
+    border-radius:8px; padding:12px; font-size:12px; font-family:'IBM Plex Mono', monospace;
+    display:none; width:220px;
+  }
+  #cb-popover button{ margin-top:6px; width:100%; }
+
+  #cb-embedded-overlay button{
+    background:#c9a24b; color:#0a0d14; border:none; border-radius:5px;
+    padding:6px 10px; font-family:'IBM Plex Mono', monospace; font-size:11px; cursor:pointer;
+  }
+  #cb-embedded-overlay button:disabled{ opacity:0.3; cursor:not-allowed; }
+  #cb-embedded-overlay button.secondary{ background:#2a3142; color:#e8e6df; }
+  #cb-embedded-overlay button.mode-active{ background:#4a9c5d; color:#0a0d14; box-shadow: 0 0 0 2px #6bc47f; }
+
+  #cb-log{ flex:1; max-height: 42vh; overflow-y:auto; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#9098a8; }
+  #cb-actions{ width:260px; flex-shrink:0; display:flex; flex-direction:column; gap:6px; }
+  #cb-actions > div{ flex-wrap: wrap; }
+  #cb-actions button{ font-size: 10.5px; padding: 5px 8px; }
+  #cb-bodyparts{ display:flex; gap:4px; flex-wrap:wrap; }
+  #cb-bodyparts button{ flex:1; min-width:60px; }
+
+  #cb-embedded-overlay h3{ font-size:11px; letter-spacing:1px; color:#c9a24b; text-transform:uppercase; margin:4px 0; }
 </style>
+
 </head>
 <body>
+
+<div id="cb-embedded-overlay">
+<div id="cb-left"><h3>Müttefikler</h3><div id="cb-left-list"></div></div>
+<div id="cb-map-wrap">
+  <div id="cb-grid-container" style="position:relative;"><div id="cb-grid"></div><svg id="cb-laser-overlay" style="position:absolute; inset:0; pointer-events:none;"></svg></div>
+  <div id="cb-zoom-controls">
+    <button id="cb-zoom-in" class="secondary">+</button>
+    <button id="cb-zoom-out" class="secondary">−</button>
+    <button id="cb-zoom-reset" class="secondary" style="font-size:11px;">⟳</button>
+  </div>
+</div>
+<div id="cb-right">
+  <div id="cb-haul-panel" style="display:none; margin-bottom:12px; padding:8px; background:#1a2016; border:1px solid #4a9c5d; border-radius:4px;">
+    <div style="font-size:10px; color:#9098a8; text-transform:uppercase; letter-spacing:1px;">Total Haul</div>
+    <div id="cb-haul-extracted" style="font-size:16px; color:#6bc47f; font-weight:600;">0 TL</div>
+    <div style="font-size:10px; color:#9098a8; margin-top:4px;">Mekanda Kalan</div>
+    <div id="cb-haul-remaining" style="font-size:13px; color:#c9a24b;">0 TL</div>
+  </div>
+  <h3>Düşmanlar</h3><div id="cb-right-list"></div>
+</div>
+
+<div id="cb-bottom">
+  <div id="cb-placement-panel">
+    <h3>Ekibini Yerleştir</h3>
+    <div id="cb-roster-list"></div>
+    <button id="cb-btn-start-ambush">Pusuyu Başlat</button>
+  </div>
+  <div id="cb-actions">
+    <h3>Sıra: <span id="cb-current-name">-</span> (Round <span id="cb-round">1</span>)</h3>
+    <div style="display:flex; gap:6px;">
+      <button id="cb-btn-move">Hareket Modu</button>
+      <button id="cb-btn-fire">Ateş Et</button>
+      <button id="cb-btn-suppress" class="secondary" style="display:none;">Bastırma Ateşi</button>
+      <button id="cb-btn-reload">Şarjör Değiştir</button>
+      <button id="cb-btn-cover" class="secondary">Siper Al</button>
+      <button id="cb-btn-consumables" class="secondary">Consumables</button>
+      <button id="cb-btn-loot" class="secondary">Malzeme Al</button>
+      <button id="cb-btn-borrow-ammo" class="secondary">Mermi Ödünç Al</button>
+      <button id="cb-btn-vault" class="secondary" style="display:none;">Kasayı Aç</button>
+      <button id="cb-btn-pickup" class="secondary" style="display:none;">Eşyayı Çantana Koy</button>
+      <button id="cb-btn-pickup-dropped" class="secondary" style="display:none;">Yerden Ganimet Al</button>
+      <button id="cb-btn-flee" class="secondary">Kaç</button>
+      <button id="cb-btn-end" class="secondary">Sırayı Bitir</button>
+    </div>
+    <div id="cb-consumable-menu" style="display:none; gap:6px; flex-wrap:wrap;"></div>
+    <div style="display:flex; gap:6px;">
+      <span style="font-size:10.5px; color:#9098a8; align-self:center;">Bakış:</span>
+      <button class="secondary" data-turn="up">▲</button>
+      <button class="secondary" data-turn="down">▼</button>
+      <button class="secondary" data-turn="left">◀</button>
+      <button class="secondary" data-turn="right">▶</button>
+    </div>
+    <div id="cb-bodyparts" style="display:none;">
+      <button data-part="bas">Baş</button>
+      <button data-part="gogus">Göğüs</button>
+      <button data-part="karin">Karın</button>
+      <button data-part="kol">Kol</button>
+      <button data-part="bacak">Bacak</button>
+    </div>
+    <div style="font-size:10.5px; color:#9098a8;" id="cb-status-line"></div>
+  </div>
+  <div id="cb-log"></div>
+</div>
+
+<div id="cb-popover"></div>
+
+<div id="cb-aftermath-overlay" style="display:none; position:fixed; inset:0; background:rgba(5,7,11,0.92); z-index:100; align-items:center; justify-content:center;">
+  <div id="cb-aftermath-panel" style="width:420px; max-height:85vh; overflow-y:auto; background:#12161f; border:1px solid #2a3142; border-radius:10px; padding:20px; font-family:'IBM Plex Mono', monospace;"></div>
+</div>
+</div>
 
 <div id="intro-screen">
   <div class="intro-title">KARANLIK ŞEHİR</div>
@@ -659,6 +855,10 @@
 
 <script src="game-data.js"></script>
 <script src="road-network.js"></script>
+<script src="combat/combat-data.js"></script>
+<script src="combat/heist-map-templates.js"></script>
+<script src="combat/combat-engine.js"></script>
+<script src="combat/combat-ui-embedded.js"></script>
 <script src="game-engine.js"></script>
 </body>
 </html>

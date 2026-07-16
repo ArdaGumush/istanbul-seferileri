@@ -16,6 +16,18 @@ const cbState = {
   victoryResult: null, // 'player' | 'enemy' - savaş bitince belirlenir
   pendingBreaches: [], // { x, y, detonateAtRound, placedBy } - gecikmeli breach charge'lar
   log: [],
+
+  // ---- SOYGUN (Heist Extraction) moduna özel alanlar ----
+  isHeistMode: false,
+  heistTheme: null,
+  heistDifficulty: "orta", // 'kolay' | 'orta' | 'zor' - vault door süresini belirler
+  heistTotalHaul: 0, // mekanda başlangıçta bulunan toplam para
+  heistRemainingHaul: 0, // henüz pickup edilmemiş, hazine odasında kalan miktar
+  heistExtractedTotal: 0, // başarıyla çıkarılmış (extraction noktasından geçmiş) toplam
+  vaultDoorOpen: false,
+  vaultDoorTimer: null, // { triggeredAtRound, roundsRequired } - null ise henüz tetiklenmedi
+  policeWaveNumber: 0, // kaçıncı dalga geldi (0 = henüz gelmedi)
+  policeWaveNextRound: null, // bir sonraki dalganın geleceği round
 };
 
 // ---------------- HARİTA YÜKLEME ----------------
@@ -36,6 +48,195 @@ function cbLoadProceduralMap(mapType, size) {
   cbState.mapEntrance = data.entrance;
   cbState.mapRooms = data.rooms || null; // sadece hideout için dolu, alley'de null
   cbState.mapType = mapType;
+}
+
+// Soygun hedefine özel harita şablonunu (heist-map-templates.js) yükler.
+// Genel cbLoadProceduralMap'ten farkı: hazır grid kullanır, üretmez; ayrıca
+// tema renklerini (cbState.heistTheme) UI'ın kullanabilmesi için saklar.
+function cbLoadHeistMap(targetId) {
+  const data = cbGenerateHeistMap(targetId);
+  if (!data) return false;
+  cbState.grid = data.grid;
+  cbState.rows = data.grid.length;
+  cbState.cols = data.grid[0].length;
+  cbState.heistTheme = data.theme;
+  cbState.mapType = "heist_" + targetId;
+  cbState.mapRooms = null;
+
+  // Entrance koordinatını grid içinde arayarak buluyoruz (şablonlarda sabit tanımlı)
+  let entrance = null;
+  for (let y = 0; y < cbState.rows && !entrance; y++) {
+    for (let x = 0; x < cbState.cols; x++) {
+      if (data.grid[y][x] === "entrance") { entrance = { x, y }; break; }
+    }
+  }
+  cbState.mapEntrance = entrance;
+  return true;
+}
+
+// ============================================================
+// SOYGUN (Heist Extraction) MEKANİKLERİ
+// ============================================================
+
+const CB_VAULT_DOOR_ROUNDS = { kolay: 2, orta: 3, zor: 4 };
+const CB_PICKUP_FRACTION = 1 / 9; // her pickup, toplam mekan parasının 1/9'unu verir
+const CB_CHARACTER_HAUL_LIMIT_FRACTION = 1 / 3; // bir karakterin taşıyabileceği maksimum (toplamın 1/3'ü)
+
+// Bir karakter vault door'un bitişiğinde "Kasayı Aç" aksiyonunu kullanınca çağrılır.
+// Zorluk seviyesine göre tur sayacını başlatır. Aksiyon puanı harcanır.
+function cbStartVaultDoorTimer(unit) {
+  if (cbState.vaultDoorOpen || cbState.vaultDoorTimer) return false; // zaten açık ya da açılıyor
+  const roundsRequired = CB_VAULT_DOOR_ROUNDS[cbState.heistDifficulty] || 3;
+  cbState.vaultDoorTimer = { triggeredAtRound: cbState.round, roundsRequired };
+  unit.actionsLeft.act = false;
+  cbLog(`${unit.name} kasa kapısını açmaya başladı. ${roundsRequired} tur sürecek.`);
+  return true;
+}
+
+// Her yeni round başında çağrılır - vault door sayacını kontrol edip süresi
+// dolmuşsa kapıyı gerçekten açar (grid üzerindeki vault_door karelerini floor'a çevirir).
+function cbProcessVaultDoorTimer() {
+  if (!cbState.vaultDoorTimer || cbState.vaultDoorOpen) return;
+  const elapsed = cbState.round - cbState.vaultDoorTimer.triggeredAtRound;
+  if (elapsed >= cbState.vaultDoorTimer.roundsRequired) {
+    cbState.vaultDoorOpen = true;
+    for (let y = 0; y < cbState.rows; y++) {
+      for (let x = 0; x < cbState.cols; x++) {
+        if (cbState.grid[y][x] === "vault_door") cbState.grid[y][x] = "floor";
+      }
+    }
+    cbLog("Kasa kapısı açıldı!");
+  }
+}
+
+// Bir karakter treasure karesinde "Eşyayı Çantana Koy" aksiyonunu kullanınca çağrılır.
+function cbPickupHaul(unit) {
+  if (cbState.heistRemainingHaul <= 0) {
+    cbLog("Hazine odasında alınacak bir şey kalmadı.");
+    return false;
+  }
+  const characterLimit = Math.round(cbState.heistTotalHaul * CB_CHARACTER_HAUL_LIMIT_FRACTION);
+  const currentCarried = unit.carriedHaul || 0;
+  if (currentCarried >= characterLimit) {
+    cbLog(`${unit.name} taşıyabileceği maksimum miktara ulaştı.`);
+    return false;
+  }
+  const pickupAmount = Math.min(
+    Math.round(cbState.heistTotalHaul * CB_PICKUP_FRACTION),
+    cbState.heistRemainingHaul,
+    characterLimit - currentCarried
+  );
+  unit.carriedHaul = currentCarried + pickupAmount;
+  cbState.heistRemainingHaul -= pickupAmount;
+  unit.actionsLeft.act = false;
+  cbLog(`${unit.name} çantasına ${cbFormatTL(pickupAmount)} koydu. Üzerinde: ${cbFormatTL(unit.carriedHaul)}.`);
+  return true;
+}
+
+// Bir karakter extraction (giriş) karesine ulaşınca üzerindeki parayı "teslim eder".
+// Ölü/bayılmış birimlerden para otomatik düşer (ayrı bir fonksiyonla, bkz. cbDropCarriedHaul).
+function cbExtractCarriedHaul(unit) {
+  const amount = unit.carriedHaul || 0;
+  if (amount <= 0) return 0;
+  cbState.heistExtractedTotal += amount;
+  unit.carriedHaul = 0;
+  cbLog(`${unit.name} ${cbFormatTL(amount)} ile güvenli bölgeye ulaştı.`);
+  return amount;
+}
+
+// Bir birim ölünce/bayılınca üzerindeki parayı yere düşürür (kaybolmaz, o karede kalır,
+// başka bir birim gelip cbPickupDroppedHaul ile alabilir).
+function cbDropCarriedHaul(unit) {
+  const amount = unit.carriedHaul || 0;
+  if (amount <= 0) return;
+  unit.droppedHaulAt = { x: unit.x, y: unit.y, amount };
+  unit.carriedHaul = 0;
+  cbLog(`${unit.name} düştü, üzerindeki ${cbFormatTL(amount)} yere saçıldı.`);
+}
+
+// Bir birim, düşmüş/ölmüş bir müttefikin bıraktığı parayı yerden alır.
+function cbPickupDroppedHaul(unit, deadUnit) {
+  if (!deadUnit.droppedHaulAt) return false;
+  const characterLimit = Math.round(cbState.heistTotalHaul * CB_CHARACTER_HAUL_LIMIT_FRACTION);
+  const currentCarried = unit.carriedHaul || 0;
+  const available = deadUnit.droppedHaulAt.amount;
+  const takeAmount = Math.min(available, characterLimit - currentCarried);
+  if (takeAmount <= 0) {
+    cbLog(`${unit.name} zaten taşıyabileceği maksimuma ulaşmış.`);
+    return false;
+  }
+  unit.carriedHaul = currentCarried + takeAmount;
+  deadUnit.droppedHaulAt.amount -= takeAmount;
+  if (deadUnit.droppedHaulAt.amount <= 0) deadUnit.droppedHaulAt = null;
+  cbLog(`${unit.name} yerden ${cbFormatTL(takeAmount)} topladı.`);
+  return true;
+}
+
+function cbFormatTL(amount) {
+  return Math.round(amount).toLocaleString("tr-TR") + " TL";
+}
+
+// ---- POLİS DALGALARI (Heist Extraction) ----
+// Vault door açıldıktan sonra (ilk pickup/kapı açma tetiklendiğinde) her 2 turda
+// bir, öncekinden daha güçlü bir polis dalgası girişten spawn olur. Bu birimler
+// "rushcu" kişilikte - siper almaz, geri çekilmez, en yakın hedefi kovalar.
+const CB_POLICE_WAVE_INTERVAL_ROUNDS = 2;
+const CB_POLICE_WEAPONS = ["tabanca_low", "tabanca_low", "makineli_low", "pompali_low", "tufek_low"];
+
+function cbProcessPoliceWaves() {
+  // İlk dalganın tetiklenmesi: vault door timer'ı başlatılınca (kapı açılmasa bile
+  // alarm çalmış sayılır) polis gelmeye başlar.
+  if (!cbState.vaultDoorTimer && cbState.policeWaveNumber === 0) return;
+
+  if (cbState.policeWaveNextRound === null) {
+    cbState.policeWaveNextRound = cbState.round + CB_POLICE_WAVE_INTERVAL_ROUNDS;
+    return;
+  }
+  if (cbState.round < cbState.policeWaveNextRound) return;
+
+  cbState.policeWaveNumber++;
+  const waveSize = 1 + cbState.policeWaveNumber; // 1. dalga=2 kişi, 2. dalga=3, 3. dalga=4...
+  const entrance = cbState.mapEntrance;
+  if (!entrance) return;
+
+  for (let i = 0; i < waveSize; i++) {
+    const spot = cbFindSpawnSpotNearEntrance(entrance, i);
+    if (!spot) continue;
+    const weapon = CB_POLICE_WEAPONS[Math.min(i, CB_POLICE_WEAPONS.length - 1)];
+    const unit = {
+      id: cbUid(), name: `Polis ${cbState.policeWaveNumber}-${i + 1}`, side: "enemy",
+      x: spot.x, y: spot.y, dir: "up", hp: 100,
+      weapon, magAmmo: CB_WEAPONS[weapon].magSize, spareMags: 1,
+      armorQuality: cbState.policeWaveNumber >= 3 ? "standart" : null, // 3. dalgadan itibaren zırhlı
+      personality: "rushcu",
+      actionsLeft: { move: true, act: true }, status: "active", injuries: [],
+    };
+    cbState.units.push(unit);
+  }
+  cbLog(`${cbState.policeWaveNumber}. polis dalgası geldi! (${waveSize} kişi)`);
+  cbState.policeWaveNextRound = cbState.round + CB_POLICE_WAVE_INTERVAL_ROUNDS;
+  cbBuildTurnOrder(); // yeni birimler sıraya dahil edilsin
+}
+
+// Giriş noktasının etrafında, boş bir floor karesi bulur (spawn için).
+function cbFindSpawnSpotNearEntrance(entrance, offset) {
+  const candidates = [];
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const x = entrance.x + dx, y = entrance.y + dy;
+      if (cbTileAt(x, y) === "floor" || cbTileAt(x, y) === "entrance") {
+        if (!cbUnitAt(x, y)) candidates.push({ x, y });
+      }
+    }
+  }
+  if (candidates.length === 0) return null;
+  return candidates[offset % candidates.length];
+}
+
+// Bir birimin, belirtilen tile tipine bitişik (4 komşu yön) olup olmadığını kontrol eder.
+function cbIsAdjacentToTile(unit, tileType) {
+  const neighbors = [[unit.x + 1, unit.y], [unit.x - 1, unit.y], [unit.x, unit.y + 1], [unit.x, unit.y - 1]];
+  return neighbors.some(([nx, ny]) => cbTileAt(nx, ny) === tileType);
 }
 
 function cbTileAt(x, y) {
@@ -109,6 +310,60 @@ function cbPickClusteredFromPool(pool, count) {
     if (visited.has(key)) continue;
     visited.add(key);
     cluster.push(candidate);
+  }
+
+  return cluster.slice(0, count);
+}
+
+// Girişten (mapEntrance) en az minDist kadar uzak bir merkez noktadan başlayarak,
+// birbirine yakın (BFS ile bağlı) count kadar floor karesi kümesi bulur.
+function cbFindClusteredFloorTilesFromEntrance(count, minDist) {
+  const entrance = cbState.mapEntrance;
+  const candidates = [];
+  for (let y = 0; y < cbState.rows; y++) {
+    for (let x = 0; x < cbState.cols; x++) {
+      if (cbTileAt(x, y) !== "floor") continue;
+      if (cbUnitAt(x, y)) continue;
+      if (entrance) {
+        const dist = Math.abs(x - entrance.x) + Math.abs(y - entrance.y);
+        if (dist < minDist) continue;
+      }
+      candidates.push({ x, y });
+    }
+  }
+  if (candidates.length === 0) return cbFindClusteredFloorTiles(count, 0); // fallback: herhangi bir yer
+
+  const center = candidates[Math.floor(Math.random() * candidates.length)];
+  const visited = new Set([`${center.x},${center.y}`]);
+  const queue = [center];
+  const cluster = [center];
+
+  while (queue.length > 0 && cluster.length < count) {
+    const curr = queue.shift();
+    const neighbors = [
+      { x: curr.x + 1, y: curr.y }, { x: curr.x - 1, y: curr.y },
+      { x: curr.x, y: curr.y + 1 }, { x: curr.x, y: curr.y - 1 },
+    ];
+    neighbors.sort(() => Math.random() - 0.5);
+    neighbors.forEach(n => {
+      const key = `${n.x},${n.y}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      if (cbTileAt(n.x, n.y) !== "floor") return;
+      if (cbUnitAt(n.x, n.y)) return;
+      cluster.push(n);
+      queue.push(n);
+    });
+  }
+
+  let attempts = 0;
+  while (cluster.length < count && attempts < 100) {
+    attempts++;
+    const fallback = candidates[Math.floor(Math.random() * candidates.length)];
+    const key = `${fallback.x},${fallback.y}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    cluster.push(fallback);
   }
 
   return cluster.slice(0, count);
@@ -663,6 +918,7 @@ function cbEndUnitTurn() {
     cbState.units.forEach(u => { if (u.status === "fleeing") cbProcessFleeTick(u); });
     cbState.units.forEach(u => { if (u.status === "active") cbProcessStatusEffectsForUnit(u); });
     cbProcessBreachCharges();
+    if (cbState.isHeistMode) { cbProcessVaultDoorTimer(); cbProcessPoliceWaves(); }
     ["player", "enemy"].forEach(side => {
       if (cbTeamOutOfAmmo(side)) {
         cbResolveTeamCrisis(side);
@@ -688,6 +944,7 @@ function cbEndUnitTurn() {
       cbState.units.forEach(u => { if (u.status === "fleeing") cbProcessFleeTick(u); });
       cbState.units.forEach(u => { if (u.status === "active") cbProcessStatusEffectsForUnit(u); });
       cbProcessBreachCharges();
+      if (cbState.isHeistMode) { cbProcessVaultDoorTimer(); cbProcessPoliceWaves(); }
       ["player", "enemy"].forEach(side => {
         if (cbTeamOutOfAmmo(side)) cbResolveTeamCrisis(side);
       });
@@ -701,11 +958,31 @@ function cbEndUnitTurn() {
 }
 
 function cbCheckVictory() {
+  if (cbState.isHeistMode) return cbCheckHeistVictory();
+
   const playerAlive = cbState.units.some(u => u.side === "player" && (u.status === "active" || u.status === "fleeing"));
   const enemyAlive = cbState.units.some(u => u.side === "enemy" && (u.status === "active" || u.status === "fleeing"));
   if (!enemyAlive) return "player";
   if (!playerAlive) return "enemy";
   return null;
+}
+
+// Heist modunda kazanma koşulu farklıdır: düşmanları tamamen yok etmek gerekmez
+// (polis dalgaları sürekli gelir), bunun yerine TÜM hayatta kalan oyuncu karakterleri
+// entrance (çıkış) karesinden geçip haritadan ayrılmalıdır ("extracted" sayılır).
+// Kaybetme koşulu: tüm oyuncu birimleri öldü/bayıldı (kaçamayacak durumda).
+function cbCheckHeistVictory() {
+  const playerUnits = cbState.units.filter(u => u.side === "player");
+  const stillOnMap = playerUnits.filter(u => u.status === "active" || u.status === "fleeing");
+
+  if (stillOnMap.length === 0) {
+    // Haritada aktif/kaçan kimse kalmadı - hepsi ya çıktı ya da düştü
+    const anyDeadOrDown = playerUnits.some(u => u.status === "dead" || u.status === "down");
+    const anyExtracted = playerUnits.some(u => u.extracted);
+    if (anyExtracted) return "player"; // en az biri çıkmayı başardıysa kazanılmış sayılır
+    if (anyDeadOrDown) return "enemy"; // kimse çıkamadan tüm ekip düştüyse kayıp
+  }
+  return null; // hâlâ haritada aktif birim var, savaş devam ediyor
 }
 
 // ============================================================
@@ -1287,6 +1564,7 @@ const CB_PERSONALITY_PROFILES = {
   agresif: { coverChance: 0.25, retreatHpRatio: 0.15, preferNearest: true, criticalPartChance: 0.15 },
   sinsi: { coverChance: 0.45, retreatHpRatio: 0.35, preferNearest: false, criticalPartChance: 0.45 },
   savunmaci: { coverChance: 0.65, retreatHpRatio: 0.5, preferNearest: false, criticalPartChance: 0.1 },
+  rushcu: { coverChance: 0, retreatHpRatio: 0, preferNearest: true, criticalPartChance: 0.2 }, // polis dalgaları: hiç siper almaz, asla geri çekilmez
 };
 
 function cbGetPersonalityProfile(unit) {

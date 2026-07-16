@@ -36,6 +36,33 @@ function cbSetupDemo() {
 
 let cbEnemyRosterTemplate = [];
 
+// Ana oyundan gelen gerçek ekip/düşman verisiyle combat'ı kurar (cbSetupDemo'nun
+// gerçek veri kullanan versiyonu). config.playerCrew ve config.enemyRoster,
+// game-engine.js tarafındaki cbBuildCombatRosterFromCrew() ile üretilir.
+function cbSetupFromConfig(config) {
+  cbPlacementRoster = config.playerCrew.map(c => ({
+    id: cbUid(), name: c.name, side: "player", dir: "up", hp: 100,
+    weapon: c.weapon, magAmmo: c.magAmmo, spareMags: c.spareMags,
+    armorQuality: c.armorQuality || null, attributes: c.attributes || null,
+    consumables: c.consumables || {},
+    actionsLeft: { move: true, act: true }, status: "active", injuries: [],
+    gameCharacterId: c.gameCharacterId, // ana oyundaki crew.id ile eşleşir (sonuç aktarımı için)
+  }));
+  cbEnemyRosterTemplate = config.enemyRoster.map(e => ({
+    name: e.name, weapon: e.weapon, magAmmo: e.magAmmo, spareMags: e.spareMags,
+    personality: e.personality || "agresif", armorQuality: e.armorQuality || null,
+    attributes: e.attributes || null, sourceGangId: e.sourceGangId,
+  }));
+
+  cbState.units = [];
+  cbState.phase = "placement";
+  cbState.ambushMode = true;
+  cbState.ambushInitiator = config.ambushInitiator || "player";
+  cbState.round = 1;
+
+  cbPlaceEnemiesForAmbush();
+}
+
 // Yerleştirme aşaması tamamlanınca çağrılır: düşmanları otomatik yerleştirir,
 // FoW'u aktif eder ve kombatı başlatır.
 function cbPlaceEnemiesForAmbush() {
@@ -211,7 +238,10 @@ function cbRenderGrid() {
       const isVisible = isPlacement ? true : visibleTiles.has(key);
       const el = document.createElement("div");
       el.className = "cb-tile " + tile + (isVisible ? "" : " hidden");
-      if (tile === "floor") {
+      if (cbState.heistTheme && cbState.heistTheme[tile]) {
+        // Soygun haritalarında sabit texture yerine hedefe özel tema rengi kullanılır
+        el.style.background = cbState.heistTheme[tile];
+      } else if (tile === "floor") {
         el.className += " gfloor";
       }
       if (reachableSet.has(key)) el.className += " cb-reachable";
@@ -416,10 +446,13 @@ function cbRenderSideLists() {
   cbState.units.filter(u => u.side === "player").forEach(u => {
     const card = document.createElement("div");
     card.className = "cb-unit-card" + (current && current.id === u.id ? " current" : "");
+    const haulLine = (cbState.isHeistMode && (u.carriedHaul || 0) > 0)
+      ? `<div style="color:#c9a24b; font-size:11px;">💰 ${cbFormatTL(u.carriedHaul)}</div>` : "";
     card.innerHTML = `
       <div class="name">${u.name} ${u.status !== "active" ? "(" + u.status + ")" : ""}</div>
       <div class="hpbar"><div class="hpfill" style="width:${Math.max(0,u.hp/CB_CONSTANTS.maxHP*100)}%"></div></div>
       <div>${u.hp} HP</div>
+      ${haulLine}
     `;
     card.addEventListener("click", (e) => cbShowUnitPopover(u, e.clientX, e.clientY));
     leftEl.appendChild(card);
@@ -549,6 +582,31 @@ function cbRenderActionPanel() {
   borrowBtn.disabled = !isPlayerTurn || stunned || !current.actionsLeft.act;
   borrowBtn.classList.toggle("mode-active", cbMode === "borrow-ammo");
 
+  // ---- Heist mekanikleri: Kasayı Aç / Eşyayı Çantana Koy / Yerden Ganimet Al ----
+  const vaultBtn = document.getElementById("cb-btn-vault");
+  const pickupBtn = document.getElementById("cb-btn-pickup");
+  const pickupDroppedBtn = document.getElementById("cb-btn-pickup-dropped");
+  if (cbState.isHeistMode && isPlayerTurn) {
+    const adjacentVaultDoor = cbIsAdjacentToTile(current, "vault_door");
+    const onTreasureTile = cbTileAt(current.x, current.y) === "treasure";
+    const adjacentDroppedHaul = cbState.units.some(u =>
+      u.droppedHaulAt && Math.abs(u.x - current.x) + Math.abs(u.y - current.y) <= 1
+    );
+
+    vaultBtn.style.display = (!cbState.vaultDoorOpen && !cbState.vaultDoorTimer && adjacentVaultDoor) ? "inline-block" : "none";
+    vaultBtn.disabled = stunned || !current.actionsLeft.act;
+
+    pickupBtn.style.display = (onTreasureTile && cbState.heistRemainingHaul > 0) ? "inline-block" : "none";
+    pickupBtn.disabled = stunned || !current.actionsLeft.act;
+
+    pickupDroppedBtn.style.display = adjacentDroppedHaul ? "inline-block" : "none";
+    pickupDroppedBtn.disabled = stunned || !current.actionsLeft.act;
+  } else {
+    vaultBtn.style.display = "none";
+    pickupBtn.style.display = "none";
+    pickupDroppedBtn.style.display = "none";
+  }
+
   document.getElementById("cb-btn-move").classList.toggle("mode-active", cbMode === "move");
   document.getElementById("cb-btn-fire").classList.toggle("mode-active", cbMode === "fire");
 
@@ -573,10 +631,49 @@ function cbRenderLog() {
   el.scrollTop = el.scrollHeight;
 }
 
+// Sağ üstteki "Total Haul" panelini günceller - sadece heist modunda görünür.
+function cbRenderHaulPanel() {
+  const panel = document.getElementById("cb-haul-panel");
+  if (!cbState.isHeistMode) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  document.getElementById("cb-haul-extracted").textContent = cbFormatTL(cbState.heistExtractedTotal);
+  document.getElementById("cb-haul-remaining").textContent = cbFormatTL(cbState.heistRemainingHaul);
+}
+
+// Heist modunda, HER render'da "dead" veya "down" durumuna yeni düşmüş (henüz
+// haul'u düşürülmemiş) birimlerin parasını otomatik yere döker. Bu, kod içindeki
+// birçok farklı ölüm/bayılma noktasını tek tek değiştirmek yerine merkezi bir
+// güvenlik kontrolü olarak çalışır.
+// Heist modunda, üzerinde para taşıyan bir birim entrance (çıkış) karesine
+// ulaşınca parasını otomatik teslim eder ve kendisi "extracted" (sahne dışı) olur.
+function cbProcessExtractionForUnits() {
+  if (!cbState.isHeistMode) return;
+  cbState.units.forEach(u => {
+    if (u.side === "player" && u.status === "active" && cbTileAt(u.x, u.y) === "entrance") {
+      if ((u.carriedHaul || 0) > 0) cbExtractCarriedHaul(u);
+      u.extracted = true;
+      u.status = "fled"; // mevcut sistemdeki "sahneden ayrılmış" durumuyla tutarlı
+      cbLog(`${u.name} güvenli bölgeye ulaştı ve haritadan ayrıldı.`);
+    }
+  });
+}
+
+function cbProcessHaulDropsForFallenUnits() {
+  if (!cbState.isHeistMode) return;
+  cbState.units.forEach(u => {
+    if ((u.status === "dead" || u.status === "down") && (u.carriedHaul || 0) > 0) {
+      cbDropCarriedHaul(u);
+    }
+  });
+}
+
 function cbRefreshAll() {
+  cbProcessHaulDropsForFallenUnits();
+  cbProcessExtractionForUnits();
   cbRenderGrid();
   cbRenderSideLists();
   cbRenderPlacementPanel();
+  cbRenderHaulPanel();
 
   if (cbState.phase === "placement") {
     cbRenderLog();
@@ -702,6 +799,30 @@ document.getElementById("cb-btn-borrow-ammo").addEventListener("click", () => {
   cbRenderActionPanel();
 });
 
+document.getElementById("cb-btn-vault").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  cbStartVaultDoorTimer(current);
+  cbRefreshAll();
+});
+
+document.getElementById("cb-btn-pickup").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  cbPickupHaul(current);
+  cbRefreshAll();
+});
+
+document.getElementById("cb-btn-pickup-dropped").addEventListener("click", () => {
+  const current = cbCurrentUnit();
+  if (!current) return;
+  const target = cbState.units.find(u =>
+    u.droppedHaulAt && Math.abs(u.x - current.x) + Math.abs(u.y - current.y) <= 1
+  );
+  if (target) cbPickupDroppedHaul(current, target);
+  cbRefreshAll();
+});
+
 document.getElementById("cb-btn-flee").addEventListener("click", () => {
   const current = cbCurrentUnit();
   if (current) { cbStartFlee(current); cbEndUnitTurn(); cbMode = null; cbRefreshAll(); }
@@ -758,6 +879,31 @@ document.querySelectorAll("[data-turn]").forEach(btn => {
 // ============================================================
 let cbCapturedUnits = []; // { unit, decision: 'execute'|'capture'|'release' }
 
+// Savaş bittiğinde ana oyuna aktarılacak özet sonucu derler.
+function cbBuildCombatResult() {
+  const won = cbState.victoryResult === "player";
+  const playerUnits = cbState.units.filter(u => u.side === "player").map(u => ({
+    gameCharacterId: u.gameCharacterId,
+    name: u.name,
+    status: u.status, // 'active' | 'down' | 'dead' | 'fled' | 'fleeing'
+    hp: u.hp,
+    injuries: u.injuries || [],
+  }));
+  const enemyUnits = cbState.units.filter(u => u.side === "enemy").map(u => ({
+    name: u.name,
+    status: u.status, // 'dead' | 'captured' | 'down' (terk edilmiş) | 'fled'
+    hp: u.hp,
+    sourceGangId: u.sourceGangId,
+  }));
+  return { won, playerUnits, enemyUnits, heistExtractedTotal: cbState.isHeistMode ? cbState.heistExtractedTotal : undefined };
+}
+
+function cbCloseEmbeddedCombat() {
+  document.getElementById("cb-aftermath-overlay").style.display = "none";
+  const result = cbBuildCombatResult();
+  if (cbEmbeddedOnComplete) cbEmbeddedOnComplete(result);
+}
+
 function cbShowAftermathScreen() {
   const overlay = document.getElementById("cb-aftermath-overlay");
   const panel = document.getElementById("cb-aftermath-panel");
@@ -772,9 +918,7 @@ function cbShowAftermathScreen() {
     html += `<button id="cb-aftermath-close">Kapat</button>`;
     panel.innerHTML = html;
     overlay.style.display = "flex";
-    document.getElementById("cb-aftermath-close").addEventListener("click", () => {
-      overlay.style.display = "none";
-    });
+    document.getElementById("cb-aftermath-close").addEventListener("click", cbCloseEmbeddedCombat);
     return;
   }
 
@@ -783,9 +927,7 @@ function cbShowAftermathScreen() {
     html += `<button id="cb-aftermath-close">Kapat</button>`;
     panel.innerHTML = html;
     overlay.style.display = "flex";
-    document.getElementById("cb-aftermath-close").addEventListener("click", () => {
-      overlay.style.display = "none";
-    });
+    document.getElementById("cb-aftermath-close").addEventListener("click", cbCloseEmbeddedCombat);
     return;
   }
 
@@ -831,8 +973,8 @@ function cbShowAftermathScreen() {
       }
       // 'release' durumunda unit'e dokunulmaz, olduğu gibi kalır (sahneden ayrılmış sayılır)
     });
-    overlay.style.display = "none";
     cbLog(`Operasyon tamamlandı. ${cbCapturedUnits.length} mahkum ele geçirildi.`);
+    cbCloseEmbeddedCombat();
   });
 
   overlay.style.display = "flex";
@@ -989,14 +1131,38 @@ function cbResetView() {
   document.getElementById("cb-zoom-reset").addEventListener("click", cbResetView);
 })();
 
-// ---------------- BAŞLAT ----------------
-document.querySelectorAll("#cb-map-select-overlay [data-map]").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.getElementById("cb-map-select-overlay").style.display = "none";
-    cbLoadProceduralMap(btn.dataset.map, 20);
-    cbSetupDemo();
-    cbRefreshAll();
-    // Grid ilk kez DOM'a yerleşti, şimdi doğru boyutlarla ortalayabiliriz
-    setTimeout(cbResetView, 50);
-  });
-});
+// ---------------- BAŞLAT (Ana Oyuna Gömülü Sürüm) ----------------
+// combat-test.html'deki gibi otomatik harita seçim ekranı YOK - ana oyun,
+// hangi harita türünün kullanılacağını ve gerçek ekip/düşman verisini
+// cbInitEmbedded() çağrısıyla doğrudan sağlar.
+function cbInitEmbedded(config) {
+  // config: { mapType, playerCrew, enemyRoster, ambushInitiator, onComplete, heistConfig }
+  cbEmbeddedOnComplete = config.onComplete || null;
+  const heistTargetIds = ["kuyumcu", "banka_subesi", "ozel_sergi"];
+  if (heistTargetIds.includes(config.mapType)) {
+    cbLoadHeistMap(config.mapType);
+  } else {
+    cbLoadProceduralMap(config.mapType || "alley", 20);
+  }
+
+  // Heist-özel state'i sıfırla/ayarla (her yeni combat başlangıcında temiz başlanır)
+  if (config.heistConfig) {
+    cbState.isHeistMode = true;
+    cbState.heistDifficulty = config.heistConfig.difficulty || "orta";
+    cbState.heistTotalHaul = config.heistConfig.totalHaul || 0;
+    cbState.heistRemainingHaul = cbState.heistTotalHaul;
+    cbState.heistExtractedTotal = 0;
+    cbState.vaultDoorOpen = false;
+    cbState.vaultDoorTimer = null;
+    cbState.policeWaveNumber = 0;
+    cbState.policeWaveNextRound = null;
+  } else {
+    cbState.isHeistMode = false;
+  }
+
+  cbSetupFromConfig(config);
+  cbRefreshAll();
+  setTimeout(cbResetView, 50);
+}
+
+let cbEmbeddedOnComplete = null;
