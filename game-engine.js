@@ -24,6 +24,7 @@ const state = {
   materialStock: {}, // material id -> amount (genel depo)
   drugStock: {}, // product id -> amount (genel depo)
   activeHeists: [], // { targetId, crewIds, equipmentIds, finishesAtMin, successChance }
+  activeStreetSales: [], // { productId, amount, finishesAtMin } - manuel "Sokak Satışı" ilanları
   gangRelations: {}, // gangId -> { hostility: 0-100 }
   gangEconomy: {}, // gangId -> { cash, materialStock, drugStock }
   activeCounterOps: [], // { type, targetVehicleId, crewIds, finishesAtMin, successChance }
@@ -200,8 +201,11 @@ function initState() {
 
   // Weapons/Armors artık adet değil, segment bazında "kilidi açık mı" + "dayanıklılık" tutuyor.
   // Consumables hâlâ adet bazlı (sarf malzemesi mantığı bunu gerektiriyor).
-  WEAPONS.forEach(w => { state.armory.weapons[w.id] = { unlocked: false, durability: 100 }; });
-  ARMORS.forEach(a => { state.armory.armors[a.id] = { unlocked: false, durability: 100 }; });
+  // Weapons/Armors artık her biri kendi kimliğine (id, durability) sahip birer
+  // envanter öğesi olarak tutulur - aynı segmentten birden fazla adet olabilir,
+  // her biri farklı bir ekip üyesine atanabilir (Garaj/Filo mantığına benzer).
+  WEAPONS.forEach(w => { state.armory.weapons[w.id] = []; });
+  ARMORS.forEach(a => { state.armory.armors[a.id] = []; });
   CONSUMABLES.forEach(c => { state.armory.consumables[c.id] = 0; });
 }
 
@@ -318,11 +322,13 @@ function renderTopbar() {
 
   const hasAccountant = state.crew.some(c => c.role === "muhasebeci" && !c.assignedTo);
   const cashEl = document.getElementById("stat-cash");
-  if (hasAccountant && state.dailyIncomeTracker.lastFullDayNet !== null) {
-    const net = state.dailyIncomeTracker.lastFullDayNet;
+  if (hasAccountant) {
+    // O anki günün, o ana kadarki canlı net kâr/zararı gösterilir (gün bitmesini beklemez)
+    const tracker = state.dailyIncomeTracker;
+    const net = tracker.incomeSoFar - tracker.expenseSoFar;
     const sign = net >= 0 ? "+" : "";
     const color = net >= 0 ? "var(--gold-bright)" : "var(--blood-bright)";
-    cashEl.innerHTML = `${fmt(state.cash)} <span style="font-size:10px; color:${color};">(${sign}${fmt(net)})</span>`;
+    cashEl.innerHTML = `${fmt(state.cash)} <span style="font-size:10px; color:${color};">(${sign}${fmt(net)} bugün)</span>`;
   } else {
     cashEl.textContent = fmt(state.cash);
   }
@@ -556,11 +562,11 @@ function openCounterOpPlanner(vehicleId, opKey) {
   let slotIndex = 0;
   Object.keys(roleCounts).forEach(roleId => {
     for (let i=0; i<roleCounts[roleId]; i++) {
-      const role = CREW_ROLES[roleId];
-      const available = state.crew.filter(c => c.role === roleId && !c.assignedTo);
+      const roleName = roleSlotLabel(roleId);
+      const available = roleSlotAvailableCrew(roleId);
       const div = document.createElement("div");
       div.className = "role-slot";
-      div.innerHTML = `${role.name}
+      div.innerHTML = `${roleName}
         <select data-slot="${slotIndex}" data-role="${roleId}">
           <option value="">— Boş —</option>
           ${available.map(c => `<option value="${c.id}">${c.name} (Sadakat ${Math.round(c.loyalty)})</option>`).join("")}
@@ -613,7 +619,7 @@ function resolveCounterOp(op) {
 
   const gang = RIVAL_GANGS.find(g => g.id === v.faction);
   const opCrew = op.crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
-  const playerCrew = opCrew.slice(0, 4).map(c => {
+  const playerCrew = opCrew.slice(0, 6).map(c => {
     const weapon = cbDetermineCrewWeapon(c);
     return {
       gameCharacterId: c.id, name: c.name, weapon,
@@ -904,14 +910,14 @@ function cbMapWeaponIdToCombat(weaponType) {
   return t + "_low";
 }
 
-// Bir crew üyesinin rolüne göre en uygun silahı belirler (asker alt-sınıflarına göre).
 // Bir crew üyesinin kullanacağı silahı belirler: önce kendi atanmış silahına
-// (loadout ekranından seçilmiş) bakar, yoksa rolüne göre varsayılan _low segmentine düşer.
+// (loadout ekranından seçilmiş - segment + spesifik kopya) bakar, yoksa rolüne
+// göre varsayılan _low segmentine düşer.
 function cbDetermineCrewWeapon(crewMember) {
-  if (crewMember.assignedWeaponId && state.armory.weapons[crewMember.assignedWeaponId] &&
-      state.armory.weapons[crewMember.assignedWeaponId].unlocked &&
-      state.armory.weapons[crewMember.assignedWeaponId].durability > 0) {
-    return crewMember.assignedWeaponId;
+  if (crewMember.assignedWeaponId && crewMember.assignedWeaponInstanceId) {
+    const list = state.armory.weapons[crewMember.assignedWeaponId];
+    const entry = list && list.find(x => x.id === crewMember.assignedWeaponInstanceId);
+    if (entry && entry.durability > 0) return crewMember.assignedWeaponId;
   }
   if (crewMember.role === "asker_nisanci") return "tufek_low";
   if (crewMember.role === "asker_agir_silahli") return "makineli_low";
@@ -927,13 +933,13 @@ const CB_ARMOR_ID_MAP = {
   yelek_agir: "mukemmel",
 };
 
-// Bir crew üyesinin kullanacağı zırhı belirler: kendi atanmış zırhı varsa (kilidi
-// açık, kırık değil) onu kullanır, yoksa zırhsız kalır.
+// Bir crew üyesinin kullanacağı zırhı belirler: kendi atanmış zırhı varsa (kırık
+// değil) onu kullanır, yoksa zırhsız kalır.
 function cbDetermineCrewArmor(crewMember) {
-  if (crewMember.assignedArmorId && state.armory.armors[crewMember.assignedArmorId] &&
-      state.armory.armors[crewMember.assignedArmorId].unlocked &&
-      state.armory.armors[crewMember.assignedArmorId].durability > 0) {
-    return CB_ARMOR_ID_MAP[crewMember.assignedArmorId] || null;
+  if (crewMember.assignedArmorId && crewMember.assignedArmorInstanceId) {
+    const list = state.armory.armors[crewMember.assignedArmorId];
+    const entry = list && list.find(x => x.id === crewMember.assignedArmorInstanceId);
+    if (entry && entry.durability > 0) return CB_ARMOR_ID_MAP[crewMember.assignedArmorId] || null;
   }
   return null;
 }
@@ -942,7 +948,7 @@ function cbDetermineCrewArmor(crewMember) {
 // Sadece COMBAT_CAPABLE_ROLES içindeki (ve göreve atanmamış) üyeler alınır, en fazla 4 kişi.
 function buildCombatPlayerCrew() {
   const available = state.crew.filter(c => COMBAT_CAPABLE_ROLES.includes(c.role) && !c.assignedTo);
-  const selected = available.slice(0, 4);
+  const selected = available.slice(0, 6);
   return selected.map(c => {
     const weapon = cbDetermineCrewWeapon(c);
     return {
@@ -990,15 +996,19 @@ function applyCombatResultToGame(result, onWin, onLose) {
     }
 
     // Silah/zırh yıpranması: savaşa katılmak silahı biraz, hasar almak zırhı daha çok yıpratır.
-    if (crewMember.assignedWeaponId && state.armory.weapons[crewMember.assignedWeaponId]) {
-      const wEntry = state.armory.weapons[crewMember.assignedWeaponId];
-      wEntry.durability = Math.max(0, wEntry.durability - (4 + Math.random() * 4)); // ~%4-8 aşınma
+    if (crewMember.assignedWeaponId && crewMember.assignedWeaponInstanceId) {
+      const list = state.armory.weapons[crewMember.assignedWeaponId];
+      const wEntry = list && list.find(x => x.id === crewMember.assignedWeaponInstanceId);
+      if (wEntry) wEntry.durability = Math.max(0, wEntry.durability - (4 + Math.random() * 4)); // ~%4-8 aşınma
     }
-    if (crewMember.assignedArmorId && state.armory.armors[crewMember.assignedArmorId]) {
-      const aEntry = state.armory.armors[crewMember.assignedArmorId];
-      const tookDamage = pu.hp < 100;
-      const wear = tookDamage ? 8 + Math.random() * 10 : 2 + Math.random() * 3; // hasar aldıysa çok, almadıysa az
-      aEntry.durability = Math.max(0, aEntry.durability - wear);
+    if (crewMember.assignedArmorId && crewMember.assignedArmorInstanceId) {
+      const list = state.armory.armors[crewMember.assignedArmorId];
+      const aEntry = list && list.find(x => x.id === crewMember.assignedArmorInstanceId);
+      if (aEntry) {
+        const tookDamage = pu.hp < 100;
+        const wear = tookDamage ? 8 + Math.random() * 10 : 2 + Math.random() * 3; // hasar aldıysa çok, almadıysa az
+        aEntry.durability = Math.max(0, aEntry.durability - wear);
+      }
     }
   });
 
@@ -1024,6 +1034,12 @@ function launchDistrictCombat(id) {
   }
   const enemyRoster = buildCombatEnemyRoster(gang);
 
+  // Combat'a giden ekip üyeleri, savaş süresince başka bir operasyona seçilemesin diye işaretlenir.
+  playerCrew.forEach(pc => {
+    const c = state.crew.find(x => x.id === pc.gameCharacterId);
+    if (c) c.assignedTo = "attack:" + id;
+  });
+
   document.getElementById("cb-embedded-overlay").classList.add("active");
   cbInitEmbedded({
     mapType: "alley",
@@ -1031,6 +1047,10 @@ function launchDistrictCombat(id) {
     enemyRoster,
     ambushInitiator: "player",
     onComplete: (result) => {
+      playerCrew.forEach(pc => {
+        const c = state.crew.find(x => x.id === pc.gameCharacterId);
+        if (c) c.assignedTo = null;
+      });
       applyCombatResultToGame(result,
         () => {
           dObj.owner = "player";
@@ -1159,14 +1179,17 @@ function renderDrugsTab() {
       const lab = state.districts[id].lab;
       const activeBatch = lab.activeBatch;
       html += `<div class="card"><div class="card-title">${districtById(id).name} — Seviye ${lab.level}</div>`;
+      const hasAssignedProducer = state.crew.some(c => c.role === "uretici" && c.assignedTo === "lab:" + id);
       if (activeBatch) {
         const remaining = Math.max(0, activeBatch.finishesAtMin - state.minutes);
         const pct = Math.min(100, 100 - (remaining / activeBatch.totalMin) * 100);
         html += `
-          <div class="card-desc">${DRUG_PRODUCTS.find(p => p.id === activeBatch.productId).name} üretiliyor...</div>
+          <div class="card-desc">${DRUG_PRODUCTS.find(p => p.id === activeBatch.productId).name} üretiliyor...${activeBatch.auto ? " (otomatik)" : ""}</div>
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
           <div class="card-stat">Kalan: <span class="num">${remaining} dk</span></div>
         `;
+      } else if (hasAssignedProducer) {
+        html += `<div class="card-desc">Bu laboratuvarda atanmış bir üretici var — üretim, Ekip sekmesinden seçtiğin ürüne göre otomatik devam edecek.</div>`;
       } else {
         html += `
           <div style="margin-bottom:8px;">
@@ -1179,7 +1202,7 @@ function renderDrugsTab() {
             <input type="number" id="produce-batch-${id}" value="1" min="1" max="20" style="width:60px;">
           </div>
           <div class="card-desc" id="produce-batch-hint-${id}" style="margin-bottom:8px;"></div>
-          <button class="btn btn-gold btn-sm btn-full" data-produce="${id}">Üretimi Başlat</button>
+          <button class="btn btn-gold btn-sm btn-full" data-produce="${id}">Üretimi Başlat (Mini-Oyun)</button>
         `;
       }
       html += `</div>`;
@@ -1189,12 +1212,23 @@ function renderDrugsTab() {
   html += `<div class="section-label">Sokak Satışı</div>`;
   html += `<div class="card">`;
   DRUG_PRODUCTS.forEach(p => {
-    html += `
-      <div class="card-row">
-        <span class="card-stat">${p.name} × <span class="num">${state.drugStock[p.id]}</span></span>
-        <button class="btn btn-outline btn-sm" data-sell="${p.id}" ${state.drugStock[p.id] === 0 ? "disabled" : ""}>Sat (${fmt(p.streetPrice)}/birim)</button>
-      </div>
-    `;
+    const pendingSale = state.activeStreetSales.find(s => s.productId === p.id);
+    if (pendingSale) {
+      const remaining = Math.max(0, pendingSale.finishesAtMin - state.minutes);
+      html += `
+        <div class="card-row">
+          <span class="card-stat">${p.name} × <span class="num">${pendingSale.amount}</span> — ilan verildi</span>
+          <span class="card-stat gold">Kalan: <span class="num">${remaining} dk</span></span>
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="card-row">
+          <span class="card-stat">${p.name} × <span class="num">${state.drugStock[p.id]}</span></span>
+          <button class="btn btn-outline btn-sm" data-sell="${p.id}" ${state.drugStock[p.id] === 0 ? "disabled" : ""}>İlan Ver (${fmt(p.streetPrice)}/birim, ~3sa)</button>
+        </div>
+      `;
+    }
   });
   html += `</div>`;
 
@@ -1279,6 +1313,46 @@ function dispatchShipment() {
   render();
 }
 
+// Bir laboratuvara üretici atanınca (ya da atanmış üreticinin ürünü değiştiğinde)
+// çağrılır: hangi ürünün sürekli/otomatik üretileceğini belirler. gameTick bu
+// ayarı kullanarak, batch bitince otomatik olarak yenisini başlatır.
+function setAutoProduction(districtId, productId) {
+  const lab = state.districts[districtId].lab;
+  lab.autoProductionId = productId || null;
+  render();
+}
+
+// Bir laboratuvarda, hammadde yeterliyse otomatik bir üretim partisi başlatır
+// (üretici atanmış laboratuvarlar için gameTick tarafından çağrılır). Manuel
+// mini-oyun akışından farklı olarak sessizce başarısız olabilir (hammadde
+// yetmezse bir sonraki tik'te tekrar denenir, spam toast önlenir).
+function tryAutoStartProduction(districtId) {
+  const lab = state.districts[districtId].lab;
+  if (!lab || !lab.autoProductionId || lab.activeBatch) return;
+  const producer = state.crew.find(c => c.role === "uretici" && c.assignedTo === "lab:" + districtId);
+  if (!producer) return;
+
+  const product = DRUG_PRODUCTS.find(p => p.id === lab.autoProductionId);
+  const lvl = LAB_LEVELS.find(l => l.level === lab.level);
+  const batchCount = 1; // otomatik mod her zaman tek parti üretir, döngüsel devam eder
+
+  for (const req of product.requires) {
+    if (state.materialStock[req.material] < req.amount * lvl.capacity * batchCount) return; // sessizce bekle
+  }
+  product.requires.forEach(req => { state.materialStock[req.material] -= req.amount * lvl.capacity * batchCount; });
+
+  const totalMin = lvl.batchTimeMin;
+  const qualityFactor = 0.85 + (producer.loyalty / 100) * 0.3; // sadakate göre %85-115 verim
+  lab.activeBatch = {
+    productId: product.id, totalMin, batchCount,
+    finishesAtMin: state.minutes + totalMin,
+    yieldAmount: Math.round(product.yieldPerBatch * lvl.capacity * batchCount * qualityFactor),
+    auto: true,
+  };
+}
+
+// Manuel üretim başlatma: sadece laboratuvarda ATANMIŞ bir üretici YOKSA kullanılabilir
+// (mini-oyun akışı). Üreticili laboratuvarlar artık setAutoProduction ile yönetilir.
 function startProduction(districtId, productId, batchCount) {
   const lab = state.districts[districtId].lab;
   if (lab.activeBatch) {
@@ -1305,35 +1379,39 @@ function startProduction(districtId, productId, batchCount) {
   // (örn. 30dk temel süre, 3 parti = 30 + 15 + 15 = 60dk)
   const totalMin = Math.round(lvl.batchTimeMin * (1 + (batchCount - 1) * 0.5));
 
-  // Üretici işe alınmışsa (ve görevde değilse) mini-oyunu atla, otomatik yüksek kaliteli sonuç üret
-  const producer = state.crew.find(c => c.role === "uretici" && !c.assignedTo);
-  if (producer) {
-    const qualityFactor = 0.85 + (producer.loyalty / 100) * 0.3; // sadakate göre %85-115 verim
-    lab.activeBatch = {
-      productId, totalMin, batchCount,
-      finishesAtMin: state.minutes + totalMin,
-      yieldAmount: Math.round(product.yieldPerBatch * lvl.capacity * batchCount * qualityFactor),
-      auto: true,
-    };
-    toast("Üretim Başladı", `${producer.name} üretimi devraldı (${batchCount} parti), otomatik yürütülüyor.`, "neutral");
-    render();
-    return;
-  }
-
-  // Üretici yoksa: oyuncu mini-oyunu oynamalı, batch mini-oyun tamamlanınca başlar
+  // Mini-oyun akışı (sadece üreticisiz laboratuvarlar için)
   openProductionMinigame(districtId, productId, lvl, batchCount);
 }
+
+// Manuel "Sokak Satışı": artık anlık değil, bir ilan oluşturup 3 saat sonra
+// gerçekleşen bir süreç. Bu süre boyunca stok "rezerve" edilmiş sayılır (tekrar
+// satışa çıkarılamaz), satış tamamlanınca gelir hesaba geçer.
+const STREET_SALE_DURATION_MIN = 3 * 60;
 
 function sellDrug(productId) {
   const product = DRUG_PRODUCTS.find(p => p.id === productId);
   const amount = state.drugStock[productId];
   if (amount === 0) return;
-  const revenue = amount * product.streetPrice;
-  state.cash += revenue;
+  if (state.activeStreetSales.some(s => s.productId === productId)) {
+    toast("İlan Zaten Açık", `${product.name} için zaten bekleyen bir satış ilanın var.`, "negative");
+    return;
+  }
   state.drugStock[productId] = 0;
-  state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + product.riskPerBatch * 2);
-  toast("Satış Tamamlandı", `${amount} birim ${product.name} satıldı: ${fmt(revenue)}`, "positive");
+  state.activeStreetSales.push({
+    productId, amount,
+    finishesAtMin: state.minutes + STREET_SALE_DURATION_MIN,
+  });
+  toast("İlan Çıkarıldı", `${amount} birim ${product.name} için satış ilanı verildi. ~3 saat sürecek.`, "neutral");
   render();
+}
+
+function resolveStreetSale(sale) {
+  const product = DRUG_PRODUCTS.find(p => p.id === sale.productId);
+  const revenue = sale.amount * product.streetPrice;
+  state.cash += revenue;
+  state.heat = Math.min(GAME_CONSTANTS.maxHeat, state.heat + product.riskPerBatch * 2);
+  trackDailyIncome(revenue, 0);
+  toast("Satış Tamamlandı", `${sale.amount} birim ${product.name} satıldı: ${fmt(revenue)}`, "positive");
 }
 
 // ---------------- TAB: SOYGUN ----------------
@@ -1412,11 +1490,11 @@ function openHeistPlanner(targetId) {
   let slotIndex = 0;
   Object.keys(roleCounts).forEach(roleId => {
     for (let i = 0; i < roleCounts[roleId]; i++) {
-      const role = CREW_ROLES[roleId];
-      const available = state.crew.filter(c => c.role === roleId && !c.assignedTo);
+      const roleName = roleSlotLabel(roleId);
+      const available = roleSlotAvailableCrew(roleId);
       const div = document.createElement("div");
       div.className = "role-slot";
-      div.innerHTML = `${role.name}
+      div.innerHTML = `${roleName}
         <select data-slot="${slotIndex}" data-role="${roleId}">
           <option value="">— Boş —</option>
           ${available.map(c => `<option value="${c.id}">${c.name} (Sadakat ${c.loyalty})</option>`).join("")}
@@ -1470,7 +1548,7 @@ function resolveHeist(heist) {
   const target = HEIST_TARGETS.find(t => t.id === heist.targetId);
 
   const heistCrew = heist.crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
-  const playerCrew = heistCrew.slice(0, 4).map(c => {
+  const playerCrew = heistCrew.slice(0, 6).map(c => {
     const weapon = cbDetermineCrewWeapon(c);
     return {
       gameCharacterId: c.id, name: c.name, weapon,
@@ -1584,7 +1662,7 @@ function triggerExtractionAmbushCheck(extractedAmount, target, onSafeArrival) {
 
   // Extraction'ı başaran ekip üyelerinden (ölmemiş/bayılmamış olanlardan) devam
   // eden karakterleri alıyoruz - bu bilgi zaten crew listesinde mevcut.
-  const survivingCrew = state.crew.filter(c => !c.assignedTo).slice(0, 4);
+  const survivingCrew = state.crew.filter(c => !c.assignedTo).slice(0, 6);
   const playerCrew = survivingCrew.map(c => {
     const weapon = cbDetermineCrewWeapon(c);
     return {
@@ -1638,31 +1716,35 @@ function renderArmoryTab() {
     <div class="section-label">Envanterin</div>
     <div class="card">
   `;
-  const ownedWeapons = WEAPONS.filter(w => state.armory.weapons[w.id] && state.armory.weapons[w.id].unlocked);
-  const ownedArmors = ARMORS.filter(a => state.armory.armors[a.id] && state.armory.armors[a.id].unlocked);
+  const ownedWeapons = WEAPONS.filter(w => state.armory.weapons[w.id] && state.armory.weapons[w.id].length > 0);
+  const ownedArmors = ARMORS.filter(a => state.armory.armors[a.id] && state.armory.armors[a.id].length > 0);
   const ownedConsumables = CONSUMABLES.filter(c => state.armory.consumables[c.id] > 0);
   if (ownedWeapons.length === 0 && ownedArmors.length === 0 && ownedConsumables.length === 0) {
     html += `<div class="card-desc" style="margin-bottom:0;">Henüz hiç silah/zırh/malzemen yok.</div>`;
   } else {
     ownedWeapons.forEach(w => {
-      const dur = state.armory.weapons[w.id].durability;
-      const durColor = dur < 30 ? "blood" : dur < 70 ? "" : "gold";
-      html += `
-        <div class="card-row">
-          <span class="card-stat">${w.name}</span>
-          <span class="card-stat ${durColor}">Dayanıklılık: <span class="num">%${Math.round(dur)}</span></span>
-          ${dur < 100 ? `<button class="btn btn-outline btn-sm" data-repair="weapons:${w.id}">Tamir Et (${fmt(cbRepairCost(w.priceShop, dur))})</button>` : ""}
-        </div>`;
+      state.armory.weapons[w.id].forEach((entry, i) => {
+        const dur = entry.durability;
+        const durColor = dur < 30 ? "blood" : dur < 70 ? "" : "gold";
+        html += `
+          <div class="card-row">
+            <span class="card-stat">${w.name} #${i + 1}</span>
+            <span class="card-stat ${durColor}">Dayanıklılık: <span class="num">%${Math.round(dur)}</span></span>
+            ${dur < 100 ? `<button class="btn btn-outline btn-sm" data-repair="weapons:${w.id}:${entry.id}">Tamir Et (${fmt(cbRepairCost(w.priceShop, dur))})</button>` : ""}
+          </div>`;
+      });
     });
     ownedArmors.forEach(a => {
-      const dur = state.armory.armors[a.id].durability;
-      const durColor = dur < 30 ? "blood" : dur < 70 ? "" : "gold";
-      html += `
-        <div class="card-row">
-          <span class="card-stat">${a.name}</span>
-          <span class="card-stat ${durColor}">Dayanıklılık: <span class="num">%${Math.round(dur)}</span></span>
-          ${dur < 100 ? `<button class="btn btn-outline btn-sm" data-repair="armors:${a.id}">Tamir Et (${fmt(cbRepairCost(a.priceShop, dur))})</button>` : ""}
-        </div>`;
+      state.armory.armors[a.id].forEach((entry, i) => {
+        const dur = entry.durability;
+        const durColor = dur < 30 ? "blood" : dur < 70 ? "" : "gold";
+        html += `
+          <div class="card-row">
+            <span class="card-stat">${a.name} #${i + 1}</span>
+            <span class="card-stat ${durColor}">Dayanıklılık: <span class="num">%${Math.round(dur)}</span></span>
+            ${dur < 100 ? `<button class="btn btn-outline btn-sm" data-repair="armors:${a.id}:${entry.id}">Tamir Et (${fmt(cbRepairCost(a.priceShop, dur))})</button>` : ""}
+          </div>`;
+      });
     });
     ownedConsumables.forEach(c => { html += `<div class="card-row"><span class="card-stat">${c.name}</span><span class="card-stat gold"><span class="num">${state.armory.consumables[c.id]}</span> adet</span></div>`; });
   }
@@ -1703,8 +1785,8 @@ function renderArmoryTab() {
     buyFromShop(category, itemId);
   }));
   el.querySelectorAll("[data-repair]").forEach(b => b.addEventListener("click", () => {
-    const [category, itemId] = b.dataset.repair.split(":");
-    repairArmoryItem(category, itemId);
+    const [category, itemId, instanceId] = b.dataset.repair.split(":");
+    repairArmoryItem(category, itemId, instanceId);
   }));
   el.querySelectorAll("[data-smuggle]").forEach(b => b.addEventListener("click", () => smuggleListing(b.dataset.smuggle)));
 }
@@ -1713,21 +1795,34 @@ function renderShopCategory(title, items, category) {
   let html = `<div class="card"><div class="card-title" style="margin-bottom:8px;">${title}</div>`;
   items.forEach(item => {
     const isAmmoLike = category === "consumables";
-    const alreadyUnlocked = !isAmmoLike && state.armory[category][item.id] && state.armory[category][item.id].unlocked;
+    const ownedCount = !isAmmoLike && state.armory[category][item.id] ? state.armory[category][item.id].length : 0;
     html += `
       <div class="card-row">
-        <span class="card-stat">${item.name}</span>
+        <span class="card-stat">${item.name}${ownedCount > 0 ? ` <span class="card-stat gold">(${ownedCount} adet)</span>` : ""}</span>
         <span style="display:flex; align-items:center; gap:8px;">
           <span class="card-stat gold"><span class="num">${fmt(item.priceShop)}</span></span>
-          ${alreadyUnlocked
-            ? `<span class="card-stat gold">Sahipsin</span>`
-            : `<button class="btn btn-outline btn-sm" data-buy-shop="${category}|${item.id}" ${state.cash < item.priceShop ? "disabled" : ""}>Satın Al</button>`}
+          <button class="btn btn-outline btn-sm" data-buy-shop="${category}|${item.id}" ${state.cash < item.priceShop ? "disabled" : ""}>Satın Al</button>
         </span>
       </div>
     `;
   });
   html += `</div>`;
   return html;
+}
+
+// "asker_any" özel rol id'si, herhangi bir asker alt-tipini (nişancı/ağır silahlı/
+// devriye) temsil eder - operasyon planlayıcılarında tip zorunluluğu olmadan
+// asker atanabilmesini sağlar. Bu fonksiyon slot etiketini ve uygun ekip listesini üretir.
+function roleSlotLabel(roleId) {
+  if (roleId === "asker_any") return "Asker (herhangi)";
+  return CREW_ROLES[roleId] ? CREW_ROLES[roleId].name : roleId;
+}
+
+function roleSlotAvailableCrew(roleId) {
+  if (roleId === "asker_any") {
+    return state.crew.filter(c => COMBAT_CAPABLE_ROLES.includes(c.role) && c.role !== "surucu" && !c.assignedTo);
+  }
+  return state.crew.filter(c => c.role === roleId && !c.assignedTo);
 }
 
 function findArmoryItem(itemType, itemId) {
@@ -1744,9 +1839,11 @@ function cbRepairCost(originalPrice, currentDurability) {
   return Math.round(originalPrice * missingRatio * 0.6);
 }
 
-function repairArmoryItem(category, itemId) {
+// itemInstanceId: envanterdeki spesifik silah/zırh kopyasının kendi id'si (segment id'si değil)
+function repairArmoryItem(category, itemId, itemInstanceId) {
   const item = findArmoryItem(category, itemId);
-  const entry = state.armory[category][itemId];
+  const list = state.armory[category][itemId];
+  const entry = list && list.find(x => x.id === itemInstanceId);
   if (!item || !entry || entry.durability >= 100) return;
   const cost = cbRepairCost(item.priceShop, entry.durability);
   if (state.cash < cost) { toast("Yetersiz Bakiye", "Tamir için yeterli paran yok.", "negative"); return; }
@@ -1763,8 +1860,8 @@ function buyFromShop(category, itemId) {
   if (category === "consumables") {
     state.armory[category][itemId] = (state.armory[category][itemId] || 0) + 1;
   } else {
-    // weapons/armors: adet değil, "kilidi aç" + dayanıklılığı tam doldur
-    state.armory[category][itemId] = { unlocked: true, durability: 100 };
+    // weapons/armors: her satın alma, kendi kimliği olan yeni bir envanter kalemi ekler
+    state.armory[category][itemId].push({ id: uid(), durability: 100 });
   }
   toast("Satın Alındı", `${item.name} envanterine eklendi.`, "positive");
   render();
@@ -2008,7 +2105,29 @@ function renderCrewTab() {
       } else if (c.role === "bas_satici") {
         html += `<div class="card-desc">Kontrolündeki bölgelerde satıcıları otomatik yönetir, gelirlerinin %15'ini alır.</div>`;
       } else if (c.role === "uretici") {
-        html += `<div class="card-desc">Atandığı laboratuvarda üretimi otomatik ve kaliteli şekilde yürütür (mini-oyunu atlar).</div>`;
+        const assignedDistrictId = c.assignedTo && c.assignedTo.startsWith("lab:") ? c.assignedTo.slice(4) : null;
+        const labDistricts = playerDistrictIds().filter(id => state.districts[id].lab);
+        if (assignedDistrictId && state.districts[assignedDistrictId] && state.districts[assignedDistrictId].lab) {
+          const lab = state.districts[assignedDistrictId].lab;
+          html += `<div class="card-stat gold">Laboratuvar: <span class="num">${districtById(assignedDistrictId).name}</span></div>`;
+          html += `<div class="card-stat">Şunu Üret:</div>`;
+          html += `<select data-set-autoproduction="${assignedDistrictId}" style="width:100%; margin-bottom:6px;">`;
+          html += `<option value="">— Seçilmedi —</option>`;
+          DRUG_PRODUCTS.forEach(p => {
+            const selected = lab.autoProductionId === p.id ? "selected" : "";
+            html += `<option value="${p.id}" ${selected}>${p.name}</option>`;
+          });
+          html += `</select>`;
+          html += `<button class="btn btn-outline btn-sm" data-unassign-producer="${c.id}">Laboratuvardan Ayır</button>`;
+        } else if (labDistricts.length === 0) {
+          html += `<div class="card-desc">Henüz sahip olduğun bir laboratuvar yok.</div>`;
+        } else {
+          html += `<div class="card-desc">Henüz bir laboratuvara atanmadı, üretim yapmıyor.</div>`;
+          html += `<select data-assign-producer="${c.id}" style="width:100%;">`;
+          html += `<option value="">— Laboratuvar Seç —</option>`;
+          labDistricts.forEach(id => { html += `<option value="${id}">${districtById(id).name}</option>`; });
+          html += `</select>`;
+        }
       } else if (c.role === "doktor") {
         html += `<div class="card-desc">Yaralı ekip üyelerinin iyileşme süresini kısaltır, kronik sakatlık riskini sıfırlar.</div>`;
       } else if (c.role === "muhasebeci") {
@@ -2022,24 +2141,30 @@ function renderCrewTab() {
       }
 
       if (COMBAT_CAPABLE_ROLES.includes(c.role)) {
-        const unlockedWeapons = WEAPONS.filter(w => state.armory.weapons[w.id] && state.armory.weapons[w.id].unlocked);
-        const unlockedArmors = ARMORS.filter(a => state.armory.armors[a.id] && state.armory.armors[a.id].unlocked);
         html += `<div class="card-stat" style="margin-top:8px;">Silah:</div>`;
         html += `<select data-assign-weapon="${c.id}" style="width:100%; margin-bottom:6px;">`;
         html += `<option value="">— Varsayılan (Standart) —</option>`;
-        unlockedWeapons.forEach(w => {
-          const dur = state.armory.weapons[w.id].durability;
-          const selected = c.assignedWeaponId === w.id ? "selected" : "";
-          html += `<option value="${w.id}" ${selected} ${dur <= 0 ? "disabled" : ""}>${w.name} (%${Math.round(dur)})</option>`;
+        WEAPONS.forEach(w => {
+          const list = state.armory.weapons[w.id] || [];
+          list.forEach((entry, i) => {
+            const isAssignedElsewhere = state.crew.some(other => other.id !== c.id && other.assignedWeaponInstanceId === entry.id);
+            const selected = c.assignedWeaponInstanceId === entry.id ? "selected" : "";
+            const disabled = entry.durability <= 0 || isAssignedElsewhere;
+            html += `<option value="${w.id}:${entry.id}" ${selected} ${disabled ? "disabled" : ""}>${w.name} #${i + 1} (%${Math.round(entry.durability)})${isAssignedElsewhere ? " — başkasında" : ""}</option>`;
+          });
         });
         html += `</select>`;
         html += `<div class="card-stat">Zırh:</div>`;
         html += `<select data-assign-armor="${c.id}" style="width:100%;">`;
         html += `<option value="">— Zırhsız —</option>`;
-        unlockedArmors.forEach(a => {
-          const dur = state.armory.armors[a.id].durability;
-          const selected = c.assignedArmorId === a.id ? "selected" : "";
-          html += `<option value="${a.id}" ${selected} ${dur <= 0 ? "disabled" : ""}>${a.name} (%${Math.round(dur)})</option>`;
+        ARMORS.forEach(a => {
+          const list = state.armory.armors[a.id] || [];
+          list.forEach((entry, i) => {
+            const isAssignedElsewhere = state.crew.some(other => other.id !== c.id && other.assignedArmorInstanceId === entry.id);
+            const selected = c.assignedArmorInstanceId === entry.id ? "selected" : "";
+            const disabled = entry.durability <= 0 || isAssignedElsewhere;
+            html += `<option value="${a.id}:${entry.id}" ${selected} ${disabled ? "disabled" : ""}>${a.name} #${i + 1} (%${Math.round(entry.durability)})${isAssignedElsewhere ? " — başkasında" : ""}</option>`;
+          });
         });
         html += `</select>`;
       }
@@ -2067,14 +2192,33 @@ function renderCrewTab() {
   el.querySelectorAll("[data-show-attrs]").forEach(b => b.addEventListener("click", () => showCrewAttributes(b.dataset.showAttrs)));
   el.querySelectorAll("[data-assign-weapon]").forEach(sel => sel.addEventListener("change", () => {
     const c = state.crew.find(x => x.id === sel.dataset.assignWeapon);
-    if (c) c.assignedWeaponId = sel.value || null;
+    if (!c) return;
+    if (!sel.value) { c.assignedWeaponId = null; c.assignedWeaponInstanceId = null; return; }
+    const [weaponId, instanceId] = sel.value.split(":");
+    c.assignedWeaponId = weaponId;
+    c.assignedWeaponInstanceId = instanceId;
   }));
   el.querySelectorAll("[data-assign-armor]").forEach(sel => sel.addEventListener("change", () => {
     const c = state.crew.find(x => x.id === sel.dataset.assignArmor);
-    if (c) c.assignedArmorId = sel.value || null;
+    if (!c) return;
+    if (!sel.value) { c.assignedArmorId = null; c.assignedArmorInstanceId = null; return; }
+    const [armorId, instanceId] = sel.value.split(":");
+    c.assignedArmorId = armorId;
+    c.assignedArmorInstanceId = instanceId;
   }));
   el.querySelectorAll("[data-assign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.assign)));
   el.querySelectorAll("[data-reassign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.reassign)));
+  el.querySelectorAll("[data-assign-producer]").forEach(sel => sel.addEventListener("change", () => {
+    const c = state.crew.find(x => x.id === sel.dataset.assignProducer);
+    if (c && sel.value) { c.assignedTo = "lab:" + sel.value; render(); }
+  }));
+  el.querySelectorAll("[data-unassign-producer]").forEach(b => b.addEventListener("click", () => {
+    const c = state.crew.find(x => x.id === b.dataset.unassignProducer);
+    if (c) { c.assignedTo = null; render(); }
+  }));
+  el.querySelectorAll("[data-set-autoproduction]").forEach(sel => sel.addEventListener("change", () => {
+    setAutoProduction(sel.dataset.setAutoproduction, sel.value);
+  }));
   el.querySelectorAll("[data-recruit]").forEach(b => b.addEventListener("click", () => recruitCrew(b.dataset.recruit)));
 }
 
@@ -2785,11 +2929,11 @@ function openHideoutRaidPlanner(gangId) {
   let slotIndex = 0;
   Object.keys(roleCounts).forEach(roleId => {
     for (let i=0; i<roleCounts[roleId]; i++) {
-      const role = CREW_ROLES[roleId];
-      const available = state.crew.filter(c => c.role === roleId && !c.assignedTo);
+      const roleName = roleSlotLabel(roleId);
+      const available = roleSlotAvailableCrew(roleId);
       const div = document.createElement("div");
       div.className = "role-slot";
-      div.innerHTML = `${role.name}
+      div.innerHTML = `${roleName}
         <select data-slot="${slotIndex}" data-role="${roleId}">
           <option value="">— Boş —</option>
           ${available.map(c => `<option value="${c.id}">${c.name} (Sadakat ${Math.round(c.loyalty)})</option>`).join("")}
@@ -2807,7 +2951,7 @@ function openHideoutRaidPlanner(gangId) {
       return;
     }
     const raidCrew = crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
-    const playerCrew = raidCrew.slice(0, 4).map(c => {
+    const playerCrew = raidCrew.slice(0, 6).map(c => {
       const weapon = cbDetermineCrewWeapon(c);
       return {
         gameCharacterId: c.id, name: c.name, weapon,
@@ -2989,7 +3133,11 @@ function gameTick() {
           const hasMechanic = state.crew.some(c => c.role === "tamirci" && !c.assignedTo);
           if (hasMechanic && Math.random() < 0.5) {
             const recovered = Math.max(1, Math.round(v.amount * 0.4));
-            state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + recovered;
+            if (v.itemType === "consumables") {
+              state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + recovered;
+            } else {
+              for (let i = 0; i < recovered; i++) state.armory[v.itemType][v.itemId].push({ id: uid(), durability: 100 });
+            }
             toast("Sevkiyat Yakalandı — Kısmen Kurtarıldı", `Tamirci sayesinde ${recovered} adet ekipman kurtarıldı.`, "neutral");
           } else {
             toast("Sevkiyat Yakalandı!", `Kaçakçılık aracın polis tarafından durduruldu. Yük ve para kayıp.`, "negative");
@@ -3028,8 +3176,8 @@ function gameTick() {
       if (v.itemType === "consumables") {
         state.armory[v.itemType][v.itemId] = (state.armory[v.itemType][v.itemId] || 0) + v.amount;
       } else {
-        // weapons/armors: kaçak sevkiyat da segmentin kilidini açar (miktar önemsiz, adet tutulmuyor)
-        state.armory[v.itemType][v.itemId] = { unlocked: true, durability: 100 };
+        // weapons/armors: kaçak sevkiyat her biri kendi kimliği olan gerçek kopyalar ekler
+        for (let i = 0; i < v.amount; i++) state.armory[v.itemType][v.itemId].push({ id: uid(), durability: 100 });
       }
       const item = findArmoryItem(v.itemType, v.itemId);
       logEvent(`Kaçak sevkiyat ulaştı: ${item.name} x${v.amount}.`);
@@ -3074,6 +3222,9 @@ function gameTick() {
       logEvent(`${districtById(id).name} laboratuvarı üretimi tamamladı.`);
       lab.activeBatch = null;
     }
+    // Üretici atanmış ve otomatik üretim modu ayarlanmış laboratuvarlar, batch
+    // boşalır boşalmaz otomatik olarak yeni bir parti başlatır (oyuncu tıklamadan).
+    if (lab) tryAutoStartProduction(id);
   });
 
   // Soygun kontrolü - aynı anda birden fazlası bitmişse bile sadece ilkini işleriz,
@@ -3082,6 +3233,13 @@ function gameTick() {
   if (dueHeist) {
     state.activeHeists = state.activeHeists.filter(h => h !== dueHeist);
     resolveHeist(dueHeist);
+  }
+
+  // Sokak satışı ilanları: süresi dolanları çöz (combat gerektirmez, anlık işlenebilir)
+  const dueSales = state.activeStreetSales.filter(s => state.minutes >= s.finishesAtMin);
+  if (dueSales.length > 0) {
+    state.activeStreetSales = state.activeStreetSales.filter(s => !dueSales.includes(s));
+    dueSales.forEach(resolveStreetSale);
   }
 
   // Karşı-operasyon kontrolü (rakip araçlarına pusu/soygun/kaçırma) - aynı anda
