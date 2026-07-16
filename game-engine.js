@@ -497,7 +497,7 @@ function openCounterOpPlanner(vehicleId, opKey) {
     <div id="op-role-slots"></div>
     <div class="section-label">Özet</div>
     <div class="card">
-      <div class="card-stat">Temel Başarı: <span class="num">%${op.baseSuccess}</span></div>
+      <div class="card-desc" style="margin-bottom:0;">Bu operasyon gerçek zamanlı bir çatışmayla sonuçlanacak. Ekibinin donanımı ve sayısı savaşın gidişatını belirler.</div>
     </div>
     <button class="btn btn-blood btn-full" id="launch-counter-op" style="margin-top:10px;">Operasyonu Başlat</button>
   `;
@@ -528,19 +528,20 @@ function openCounterOpPlanner(vehicleId, opKey) {
       toast("Ekip Eksik", "Tüm rolleri doldurmalısın.", "negative");
       return;
     }
-    let successChance = op.baseSuccess;
     crewIds.forEach(cid => {
       const c = state.crew.find(x => x.id === cid);
       c.assignedTo = "counterop:" + vehicleId;
-      successChance += Math.round(c.loyalty / 20);
-      if (c.role === "surucu") successChance += 8;
     });
-    successChance = Math.min(92, successChance);
+
+    // Operasyon süresi, hedefin kalan yolculuk süresini AŞMAMALI - yoksa araç zaten
+    // ulaşmış olur ve operasyon her zaman sessizce "hedef kayboldu" ile başarısız olur.
+    const targetVehicle = state.vehicles.find(v => v.id === vehicleId);
+    const remainingTravelMin = targetVehicle ? Math.max(1, targetVehicle.arrivesAtMin - state.minutes) : 6;
+    const opDuration = Math.min(6, Math.max(1, remainingTravelMin - 1)); // hedeften en az 1 dk önce yetişsin
 
     state.activeCounterOps.push({
       type: opKey, targetVehicleId: vehicleId, crewIds,
-      finishesAtMin: state.minutes + 6,
-      successChance,
+      finishesAtMin: state.minutes + opDuration,
     });
     toast("Operasyon Başladı", `${op.name} için ekip yola çıktı.`, "neutral");
     closeModal();
@@ -1263,7 +1264,7 @@ function renderHeistTab() {
         <div class="card">
           <div class="card-title">${target.name}</div>
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-          <div class="card-stat">Kalan: <span class="num">${remaining} dk</span> · Başarı İhtimali: <span class="num">%${h.successChance}</span></div>
+          <div class="card-stat">Kalan: <span class="num">${remaining} dk</span> — süre dolunca çatışma başlayacak</div>
         </div>
       `;
     });
@@ -1303,12 +1304,12 @@ function openHeistPlanner(targetId) {
     ${target.equipmentOptions.map(eq => `
       <label class="role-slot" style="cursor:pointer;">
         <input type="checkbox" data-eq="${eq.id}" style="margin-right:6px;">
-        ${eq.name} — ${fmt(eq.cost)} (+%${eq.successBonus} başarı)
+        ${eq.name} — ${fmt(eq.cost)} (${eq.description})
       </label>
     `).join("")}
     <div class="section-label">Özet</div>
     <div class="card">
-      <div class="card-stat">Temel Başarı: <span class="num" id="heist-base-success">%${target.baseSuccess}</span></div>
+      <div class="card-desc" style="margin-bottom:0;">Bu operasyon gerçek zamanlı bir çatışmayla sonuçlanacak. Seçtiğin ekipmanlar savaş sırasında somut avantajlar sağlar.</div>
       <div class="card-stat gold">Hazırlık Süresi: <span class="num">${target.prepTimeMin} dk</span></div>
     </div>
     <button class="btn btn-blood btn-full" id="launch-heist" style="margin-top:10px;">Operasyonu Başlat</button>
@@ -1348,21 +1349,18 @@ function openHeistPlanner(targetId) {
       return;
     }
     state.cash -= equipmentCost;
-    let successChance = target.baseSuccess + (state.modifiers.heistSuccessBonus || 0);
-    equipmentIds.forEach(id => { successChance += target.equipmentOptions.find(e => e.id === id).successBonus; });
     crewIds.forEach(cid => {
       const crewMember = state.crew.find(c => c.id === cid);
       crewMember.assignedTo = "heist:" + target.id;
-      successChance += Math.round(crewMember.loyalty / 20);
-      if (crewMember.role === "surucu") successChance += 8;
     });
-    successChance = Math.min(95, successChance);
 
+    // guardCount hesabı için kaba bir zorluk göstergesi olarak baseSuccess kullanılmaya devam eder
+    // (gerçek "başarı şansı" artık yok, bu sadece düşman sayısını belirlemede yardımcı bir değer)
     state.activeHeists.push({
       targetId: target.id, crewIds, equipmentIds,
       finishesAtMin: state.minutes + target.prepTimeMin,
       totalPrepMin: target.prepTimeMin,
-      successChance,
+      successChance: target.baseSuccess,
     });
     toast("Operasyon Planlandı", `${target.name} için hazırlıklar başladı.`, "neutral");
     closeModal();
@@ -1419,6 +1417,17 @@ function resolveHeist(heist) {
   const heistDifficulty = target.difficulty <= 1 ? "kolay" : target.difficulty <= 3 ? "orta" : "zor";
   const totalHaul = Math.round(target.payout[0] + Math.random() * (target.payout[1] - target.payout[0]));
 
+  // Seçilen ekipmanların combat'a aktarılacak somut etkilerini topluyoruz
+  const equipmentEffects = { policeDelayBonus: 0, vaultSpeedBonus: 0, armorPierceBonus: 0, policeWaveSizeMod: 0 };
+  (heist.equipmentIds || []).forEach(eqId => {
+    const eq = target.equipmentOptions.find(e => e.id === eqId);
+    if (!eq) return;
+    if (eq.effect === "police_delay") equipmentEffects.policeDelayBonus += eq.effectValue;
+    if (eq.effect === "vault_speed") equipmentEffects.vaultSpeedBonus += eq.effectValue;
+    if (eq.effect === "armor_pierce") equipmentEffects.armorPierceBonus += eq.effectValue;
+    if (eq.effect === "police_wave_size") equipmentEffects.policeWaveSizeMod += eq.effectValue;
+  });
+
   state.speed = 0; // hazırlanan operasyon vakti geldi, oyun zamanı duraklar
   document.getElementById("cb-embedded-overlay").classList.add("active");
   cbInitEmbedded({
@@ -1429,6 +1438,7 @@ function resolveHeist(heist) {
     heistConfig: isRealHeistMap ? {
       difficulty: heistDifficulty,
       totalHaul,
+      equipmentEffects,
     } : null,
     onComplete: (result) => {
       heist.crewIds.forEach(cid => { const c = state.crew.find(x => x.id === cid); if (c) c.assignedTo = null; });
@@ -2667,7 +2677,7 @@ function openHideoutRaidPlanner(gangId) {
     <div id="raid-role-slots"></div>
     <div class="section-label">Özet</div>
     <div class="card">
-      <div class="card-stat">Temel Başarı: <span class="num">%${op.baseSuccess}</span></div>
+      <div class="card-desc" style="margin-bottom:0;">Bu operasyon gerçek zamanlı bir çatışmayla sonuçlanacak. En riskli operasyon olduğu için ekibin iyi donanımlı olmalı.</div>
       <div class="card-stat gold">Tahmini Ganimet: <span class="num">${fmt(state.gangEconomy[gangId] ? state.gangEconomy[gangId].cash : 0)}</span></div>
     </div>
     <button class="btn btn-blood btn-full" id="launch-raid" style="margin-top:10px;">Baskını Başlat</button>
