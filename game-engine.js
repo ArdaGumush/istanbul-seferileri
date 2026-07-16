@@ -1176,7 +1176,7 @@ function renderDrugsTab() {
           </div>
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
             <span class="card-stat">Parti Sayısı:</span>
-            <input type="number" id="produce-batch-${id}" value="1" min="1" style="width:60px;">
+            <input type="number" id="produce-batch-${id}" value="1" min="1" max="20" style="width:60px;">
           </div>
           <div class="card-desc" id="produce-batch-hint-${id}" style="margin-bottom:8px;"></div>
           <button class="btn btn-gold btn-sm btn-full" data-produce="${id}">Üretimi Başlat</button>
@@ -1280,8 +1280,16 @@ function dispatchShipment() {
 }
 
 function startProduction(districtId, productId, batchCount) {
-  batchCount = Math.max(1, batchCount || 1);
   const lab = state.districts[districtId].lab;
+  if (lab.activeBatch) {
+    toast("Üretim Zaten Sürüyor", "Bu laboratuvarda hâlâ devam eden bir üretim var, önce onun bitmesini bekle.", "negative");
+    return;
+  }
+  if (state.activeProductionMinigame && state.activeProductionMinigame.districtId === districtId) {
+    toast("Üretim Zaten Başlıyor", "Bu laboratuvar için zaten bir üretim süreci devam ediyor.", "negative");
+    return;
+  }
+  batchCount = Math.max(1, Math.min(20, batchCount || 1)); // güvenlik sınırı: input'tan gelen değer ne olursa olsun 20'yi aşamaz
   const product = DRUG_PRODUCTS.find(p => p.id === productId);
   const lvl = LAB_LEVELS.find(l => l.level === lab.level);
 
