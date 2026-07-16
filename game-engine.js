@@ -86,6 +86,55 @@ function processInjuryHealing() {
   });
 }
 
+// ============================================================
+// LOKAL KAYIT SİSTEMİ (localStorage)
+// ============================================================
+const SAVE_KEY = "karanlik_sehir_save_v1";
+let saveThrottleTimer = null;
+
+// render() her çağrıldığında tetiklenir, ama gerçek yazma en fazla 3 saniyede
+// bir gerçekleşir (throttle) - performans için sürekli disk yazımını önler.
+function requestAutoSave() {
+  if (saveThrottleTimer) return;
+  saveThrottleTimer = setTimeout(() => {
+    saveGameToLocalStorage();
+    saveThrottleTimer = null;
+  }, 3000);
+}
+
+function saveGameToLocalStorage() {
+  try {
+    const serialized = JSON.stringify(state);
+    localStorage.setItem(SAVE_KEY, serialized);
+    localStorage.setItem(SAVE_KEY + "_timestamp", Date.now().toString());
+  } catch (e) {
+    console.error("Oyun kaydedilemedi:", e);
+  }
+}
+
+function loadGameFromLocalStorage() {
+  try {
+    const serialized = localStorage.getItem(SAVE_KEY);
+    if (!serialized) return false;
+    const loaded = JSON.parse(serialized);
+    Object.keys(state).forEach(key => delete state[key]);
+    Object.assign(state, loaded);
+    return true;
+  } catch (e) {
+    console.error("Kayıtlı oyun yüklenemedi:", e);
+    return false;
+  }
+}
+
+function hasSavedGame() {
+  return localStorage.getItem(SAVE_KEY) !== null;
+}
+
+function clearSavedGame() {
+  localStorage.removeItem(SAVE_KEY);
+  localStorage.removeItem(SAVE_KEY + "_timestamp");
+}
+
 function initState() {
   DISTRICTS.forEach(d => {
     const rival = RIVAL_GANGS.find(g => g.controlledStart.includes(d.id));
@@ -1125,6 +1174,11 @@ function renderDrugsTab() {
               ${DRUG_PRODUCTS.map(p => `<option value="${p.id}">${p.name} (${p.requires.map(r => RAW_MATERIALS.find(m => m.id === r.material).name + " x" + r.amount).join(", ")})</option>`).join("")}
             </select>
           </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+            <span class="card-stat">Parti Sayısı:</span>
+            <input type="number" id="produce-batch-${id}" value="1" min="1" style="width:60px;">
+          </div>
+          <div class="card-desc" id="produce-batch-hint-${id}" style="margin-bottom:8px;"></div>
           <button class="btn btn-gold btn-sm btn-full" data-produce="${id}">Üretimi Başlat</button>
         `;
       }
@@ -1150,9 +1204,34 @@ function renderDrugsTab() {
   if (dispatchBtn) dispatchBtn.addEventListener("click", dispatchShipment);
 
   el.querySelectorAll("[data-produce]").forEach(b => b.addEventListener("click", () => {
-    const select = document.getElementById("produce-select-" + b.dataset.produce);
-    startProduction(b.dataset.produce, select.value);
+    const districtId = b.dataset.produce;
+    const select = document.getElementById("produce-select-" + districtId);
+    const batchInput = document.getElementById("produce-batch-" + districtId);
+    const batchCount = Math.max(1, parseInt(batchInput.value, 10) || 1);
+    startProduction(districtId, select.value, batchCount);
   }));
+
+  // Ürün ya da parti sayısı değiştikçe, o kadar hammadde ile kaç parti üretilebileceğini göster
+  playerDistrictIds().forEach(id => {
+    const lab = state.districts[id].lab;
+    if (!lab || lab.activeBatch) return;
+    const select = document.getElementById("produce-select-" + id);
+    const batchInput = document.getElementById("produce-batch-" + id);
+    const hint = document.getElementById("produce-batch-hint-" + id);
+    if (!select || !batchInput || !hint) return;
+
+    const updateHint = () => {
+      const product = DRUG_PRODUCTS.find(p => p.id === select.value);
+      const lvl = LAB_LEVELS.find(l => l.level === lab.level);
+      const maxAffordable = Math.min(...product.requires.map(req =>
+        Math.floor(state.materialStock[req.material] / (req.amount * lvl.capacity))
+      ));
+      hint.textContent = `Elindeki hammaddeyle en fazla ${Math.max(0, maxAffordable)} parti üretebilirsin.`;
+    };
+    select.addEventListener("change", updateHint);
+    batchInput.addEventListener("input", updateHint);
+    updateHint();
+  });
 
   el.querySelectorAll("[data-sell]").forEach(b => b.addEventListener("click", () => sellDrug(b.dataset.sell)));
 }
@@ -1200,36 +1279,41 @@ function dispatchShipment() {
   render();
 }
 
-function startProduction(districtId, productId) {
+function startProduction(districtId, productId, batchCount) {
+  batchCount = Math.max(1, batchCount || 1);
   const lab = state.districts[districtId].lab;
   const product = DRUG_PRODUCTS.find(p => p.id === productId);
   const lvl = LAB_LEVELS.find(l => l.level === lab.level);
 
   for (const req of product.requires) {
-    if (state.materialStock[req.material] < req.amount * lvl.capacity) {
+    if (state.materialStock[req.material] < req.amount * lvl.capacity * batchCount) {
       toast("Yetersiz Hammadde", `${RAW_MATERIALS.find(m => m.id === req.material).name} stoğun yeterli değil.`, "negative");
       return;
     }
   }
-  product.requires.forEach(req => { state.materialStock[req.material] -= req.amount * lvl.capacity; });
+  product.requires.forEach(req => { state.materialStock[req.material] -= req.amount * lvl.capacity * batchCount; });
+
+  // Toplu üretim süresi: ilk parti tam süre, her ek parti yarı süre alır
+  // (örn. 30dk temel süre, 3 parti = 30 + 15 + 15 = 60dk)
+  const totalMin = Math.round(lvl.batchTimeMin * (1 + (batchCount - 1) * 0.5));
 
   // Üretici işe alınmışsa (ve görevde değilse) mini-oyunu atla, otomatik yüksek kaliteli sonuç üret
   const producer = state.crew.find(c => c.role === "uretici" && !c.assignedTo);
   if (producer) {
     const qualityFactor = 0.85 + (producer.loyalty / 100) * 0.3; // sadakate göre %85-115 verim
     lab.activeBatch = {
-      productId, totalMin: lvl.batchTimeMin,
-      finishesAtMin: state.minutes + lvl.batchTimeMin,
-      yieldAmount: Math.round(product.yieldPerBatch * lvl.capacity * qualityFactor),
+      productId, totalMin, batchCount,
+      finishesAtMin: state.minutes + totalMin,
+      yieldAmount: Math.round(product.yieldPerBatch * lvl.capacity * batchCount * qualityFactor),
       auto: true,
     };
-    toast("Üretim Başladı", `${producer.name} üretimi devraldı, otomatik yürütülüyor.`, "neutral");
+    toast("Üretim Başladı", `${producer.name} üretimi devraldı (${batchCount} parti), otomatik yürütülüyor.`, "neutral");
     render();
     return;
   }
 
   // Üretici yoksa: oyuncu mini-oyunu oynamalı, batch mini-oyun tamamlanınca başlar
-  openProductionMinigame(districtId, productId, lvl);
+  openProductionMinigame(districtId, productId, lvl, batchCount);
 }
 
 function sellDrug(productId) {
@@ -1987,13 +2071,13 @@ function renderCrewTab() {
 }
 
 // ---------------- ÜRETİM MİNİ-OYUNU ----------------
-function openProductionMinigame(districtId, productId, lvl) {
+function openProductionMinigame(districtId, productId, lvl, batchCount) {
   const product = DRUG_PRODUCTS.find(p => p.id === productId);
   const backdrop = document.getElementById("district-modal-backdrop");
   const modal = document.getElementById("district-modal");
 
   state.activeProductionMinigame = {
-    districtId, productId, lvl,
+    districtId, productId, lvl, batchCount: Math.max(1, batchCount || 1),
     stepIndex: 0,
     score: 0, // 0-100 arası birikimli başarı puanı
     stepsTotal: product.minigame.steps.length,
@@ -2120,17 +2204,21 @@ function finishMinigame() {
   const product = DRUG_PRODUCTS.find(p => p.id === mg.productId);
   const normalizedScore = Math.min(100, Math.round((mg.score / (mg.stepsTotal * 30)) * 100));
   const qualityFactor = 0.5 + (normalizedScore / 100) * 0.7; // %50 - %120 verim aralığı
+  const batchCount = mg.batchCount || 1;
+
+  // Toplu üretim süresi: ilk parti tam süre, her ek parti yarı süre alır
+  const totalMin = Math.round(mg.lvl.batchTimeMin * (1 + (batchCount - 1) * 0.5));
 
   const lab = state.districts[mg.districtId].lab;
   lab.activeBatch = {
-    productId: mg.productId, totalMin: mg.lvl.batchTimeMin,
-    finishesAtMin: state.minutes + mg.lvl.batchTimeMin,
-    yieldAmount: Math.max(1, Math.round(product.yieldPerBatch * mg.lvl.capacity * qualityFactor)),
+    productId: mg.productId, totalMin, batchCount,
+    finishesAtMin: state.minutes + totalMin,
+    yieldAmount: Math.max(1, Math.round(product.yieldPerBatch * mg.lvl.capacity * batchCount * qualityFactor)),
     auto: false,
   };
 
   const grade = normalizedScore >= 80 ? "Mükemmel" : normalizedScore >= 55 ? "İyi" : normalizedScore >= 30 ? "Vasat" : "Kötü";
-  toast("Üretim Tamamlandı", `${product.name} partisi başlatıldı. Performans: ${grade} (%${normalizedScore})`, normalizedScore >= 55 ? "positive" : "neutral");
+  toast("Üretim Tamamlandı", `${product.name} üretimi başlatıldı (${batchCount} parti). Performans: ${grade} (%${normalizedScore})`, normalizedScore >= 55 ? "positive" : "neutral");
 
   state.activeProductionMinigame = null;
   closeModal();
@@ -2306,6 +2394,7 @@ function generateRecruitPool() {
       attributes: generateAttributesForRole(roleId),
     };
   });
+  state.recruitPoolGeneratedAtMin = state.day * 24 * 60 + state.minutes;
 }
 
 function recruitCrew(recruitId) {
@@ -2785,6 +2874,8 @@ function render() {
     case "crew": renderCrewTab(); break;
     case "empire": renderEmpireTab(); break;
   }
+
+  requestAutoSave();
 }
 
 function openDistrictModal(id) {
@@ -2799,6 +2890,15 @@ function gameTick() {
   const minutesPassed = GAME_CONSTANTS.minutesPerTick * state.speed;
   state.minutes += minutesPassed;
   if (state.minutes >= 24 * 60) { state.minutes -= 24 * 60; state.day++; }
+
+  // İşe alım havuzu her 3 günde bir otomatik yenilenir (henüz işe alınmamış adaylar değişir)
+  const nowAbsoluteMin = state.day * 24 * 60 + state.minutes;
+  const poolAgeMinLimit = 3 * 24 * 60;
+  if (!state.recruitPool || state.recruitPool.length === 0 ||
+      state.recruitPoolGeneratedAtMin === undefined ||
+      nowAbsoluteMin - state.recruitPoolGeneratedAtMin >= poolAgeMinLimit) {
+    generateRecruitPool();
+  }
 
   // Pasif işletme geliri (saatlik oranı tick'e böl)
   let hourlyIncome = 0, hourlyHeat = 0;
@@ -2821,10 +2921,32 @@ function gameTick() {
   // Satıcı / Dağıtım Amiri geliri
   processSalesIncome(minutesPassed);
 
-  // Ekip maaşları (saatlik)
+  // Ekip maaşları (saatlik). Nakit yetmezse maaşlar ödenemez - bu durum sadakati
+  // ciddi şekilde düşürür, üst üste ödenemezse (unpaidStreak eşiği aşılınca) ekip
+  // üyesi küser ve kendiliğinden ayrılır.
   const totalWages = state.crew.reduce((s, c) => s + c.wage, 0) * (state.modifiers.wageMult || 1);
-  state.cash -= totalWages * (minutesPassed / 60);
-  trackDailyIncome(0, totalWages * (minutesPassed / 60));
+  const wageDue = totalWages * (minutesPassed / 60);
+  if (wageDue > 0) {
+    if (state.cash >= wageDue) {
+      state.cash -= wageDue;
+      trackDailyIncome(0, wageDue);
+      state.crew.forEach(c => { c.unpaidStreak = 0; }); // maaş ödendi, seri sıfırlanır
+    } else {
+      // Nakit yetersiz: maaş ödenemiyor, ekip küskün ayrılır
+      state.cash = 0;
+      state.crew.forEach(c => {
+        c.unpaidStreak = (c.unpaidStreak || 0) + 1;
+        c.loyalty = Math.max(0, c.loyalty - 8); // ödenemeyen her tik'te ciddi sadakat kaybı
+      });
+      const quitters = state.crew.filter(c => c.unpaidStreak >= 3 || c.loyalty <= 0);
+      if (quitters.length > 0) {
+        state.crew = state.crew.filter(c => !quitters.includes(c));
+        toast("Ekip Ayrıldı", `Maaş ödenemediği için ${quitters.map(c => c.name).join(", ")} ekibi terk etti.`, "negative");
+      } else {
+        toast("Maaş Ödenemedi", "Nakit yetersiz, ekibin sadakati düşüyor.", "negative");
+      }
+    }
+  }
 
   // Ekip sadakati zamanla doğal düşer (modifier ile yavaşlatılabilir)
   const loyaltyDecay = 0.02 * (state.modifiers.loyaltyDecayMult || 1) * (minutesPassed / 60);
@@ -3137,20 +3259,47 @@ function startGame() {
 function launchGameProper() {
   document.getElementById("setup-screen").style.display = "none";
   document.getElementById("app").style.display = "grid";
-
-  // Soygun modalı için backdrop/modal elementlerini ekle
-  const backdrop = document.createElement("div");
-  backdrop.id = "district-modal-backdrop";
-  backdrop.innerHTML = `<div id="district-modal" style="position:relative;"></div>`;
-  document.body.appendChild(backdrop);
-
+  mountGameShell();
   initState();
   wireStaticEvents();
   render();
   setInterval(gameTick, GAME_CONSTANTS.tickIntervalMs);
 }
 
+// Kayıtlı bir oyunu localStorage'dan yükleyip doğrudan başlatır (initState çağırmaz,
+// çünkü mevcut ilerlemenin üzerine yazmamalıyız).
+function continueGameFromSave() {
+  document.getElementById("intro-screen").classList.add("hidden");
+  document.getElementById("app").style.display = "grid";
+  mountGameShell();
+  const loaded = loadGameFromLocalStorage();
+  if (!loaded) {
+    toast("Kayıt Bulunamadı", "Kayıtlı oyun yüklenemedi, yeni oyun başlatılıyor.", "negative");
+    startGame();
+    return;
+  }
+  wireStaticEvents();
+  render();
+  setInterval(gameTick, GAME_CONSTANTS.tickIntervalMs);
+}
+
+// Soygun modalı ve diğer paylaşılan DOM elementlerini bir kere ekler (hem yeni
+// oyun hem kayıttan devam etme akışında ortak kullanılır).
+function mountGameShell() {
+  if (document.getElementById("district-modal-backdrop")) return; // zaten eklenmiş
+  const backdrop = document.createElement("div");
+  backdrop.id = "district-modal-backdrop";
+  backdrop.innerHTML = `<div id="district-modal" style="position:relative;"></div>`;
+  document.body.appendChild(backdrop);
+}
+
 document.getElementById("start-btn").addEventListener("click", startGame);
+
+document.getElementById("continue-btn").addEventListener("click", continueGameFromSave);
+
+if (hasSavedGame()) {
+  document.getElementById("continue-btn").style.display = "block";
+}
 
 // ---------------- SETUP WIZARD ----------------
 const setupWizard = {
