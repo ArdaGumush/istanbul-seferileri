@@ -3463,6 +3463,7 @@ function wireStaticEvents() {
     b.addEventListener("click", () => {
       state.speed = parseInt(b.dataset.speed, 10);
       document.querySelectorAll(".speed-btn").forEach(x => x.classList.toggle("active", x === b));
+      render();
     });
   });
 
@@ -3499,6 +3500,9 @@ function continueGameFromSave() {
     startGame();
     return;
   }
+  // Kayıt sırasında oyun duraklatılmış (state.speed=0) olabilir - bu durumda oyuncu
+  // farkında olmadan "zaman ilerlemiyor" hissi yaşar. Güvenli varsayılan olarak 1x'e döner.
+  if (!state.speed) state.speed = 1;
   wireStaticEvents();
   render();
   setInterval(gameTick, GAME_CONSTANTS.tickIntervalMs);
