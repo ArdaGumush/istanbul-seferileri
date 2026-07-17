@@ -240,6 +240,21 @@ function randomName() {
 }
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
+// ============================================================
+// MUTLAK ZAMAN YARDIMCI FONKSİYONLARI
+// ============================================================
+// state.minutes her gün 0-1440 arasında sıfırlanıyor (state.day artıyor), bu yüzden
+// "X dakika sonra bitecek" gibi gelecekteki zamanları SADECE state.minutes ile
+// hesaplamak yanlıştır - gün geçişinde karşılaştırma bozulur (kalan süre binlerce
+// dakikaya sıçrar). Tüm "finishesAtMin"/"arrivesAtMin"/"expiresAtMin" gibi alanlar
+// bu mutlak (gün*1440+dakika) zaman üzerinden hesaplanmalı ve karşılaştırılmalıdır.
+function nowAbsoluteMin() {
+  return state.day * 24 * 60 + state.minutes;
+}
+function remainingMinutesUntil(absoluteTargetMin) {
+  return Math.max(0, absoluteTargetMin - nowAbsoluteMin());
+}
+
 // ---------------- YOL AĞI (ROAD NETWORK) ----------------
 let roadAdjacency = null;
 function buildRoadAdjacency() {
@@ -583,6 +598,10 @@ function openCounterOpPlanner(vehicleId, opKey) {
       toast("Ekip Eksik", "Tüm rolleri doldurmalısın.", "negative");
       return;
     }
+    if (new Set(crewIds).size !== crewIds.length) {
+      toast("Aynı Kişi Birden Fazla Role Atanamaz", "Her ekip üyesi sadece bir role atanabilir.", "negative");
+      return;
+    }
     crewIds.forEach(cid => {
       const c = state.crew.find(x => x.id === cid);
       c.assignedTo = "counterop:" + vehicleId;
@@ -591,12 +610,12 @@ function openCounterOpPlanner(vehicleId, opKey) {
     // Operasyon süresi, hedefin kalan yolculuk süresini AŞMAMALI - yoksa araç zaten
     // ulaşmış olur ve operasyon her zaman sessizce "hedef kayboldu" ile başarısız olur.
     const targetVehicle = state.vehicles.find(v => v.id === vehicleId);
-    const remainingTravelMin = targetVehicle ? Math.max(1, targetVehicle.arrivesAtMin - state.minutes) : 6;
+    const remainingTravelMin = targetVehicle ? Math.max(1, targetVehicle.arrivesAtMin - nowAbsoluteMin()) : 6;
     const opDuration = Math.min(6, Math.max(1, remainingTravelMin - 1)); // hedeften en az 1 dk önce yetişsin
 
     state.activeCounterOps.push({
       type: opKey, targetVehicleId: vehicleId, crewIds,
-      finishesAtMin: state.minutes + opDuration,
+      finishesAtMin: nowAbsoluteMin() + opDuration,
     });
     toast("Operasyon Başladı", `${op.name} için ekip yola çıktı.`, "neutral");
     closeModal();
@@ -644,6 +663,7 @@ function resolveCounterOp(op) {
     armorQuality: null,
   }));
 
+  state.speedBeforeCombat = state.speed;
   state.speed = 0;
   document.getElementById("cb-embedded-overlay").classList.add("active");
   cbInitEmbedded({
@@ -991,7 +1011,7 @@ function applyCombatResultToGame(result, onWin, onLose) {
       toast("Kayıp", `${pu.name} operasyonda hayatını kaybetti.`, "negative");
     } else if (pu.status === "down" || pu.hp < 100) {
       crewMember.injured = true;
-      crewMember.injuryHealAtMin = state.minutes + (3 * 24 * 60); // basitleştirilmiş: 3 gün iyileşme
+      crewMember.injuryHealAtMin = nowAbsoluteMin() + (3 * 24 * 60); // basitleştirilmiş: 3 gün iyileşme
       toast("Yaralanma", `${pu.name} yaralandı, iyileşmesi zaman alacak.`, "negative");
     }
 
@@ -1013,6 +1033,11 @@ function applyCombatResultToGame(result, onWin, onLose) {
   });
 
   document.getElementById("cb-embedded-overlay").classList.remove("active");
+
+  // Combat açılırken duraklatılan oyun zamanı, kaydedilen önceki hıza geri döner.
+  // Kaydedilmiş bir hız yoksa (beklenmedik durum) güvenli varsayılan olarak 1x kullanılır.
+  state.speed = state.speedBeforeCombat !== undefined ? state.speedBeforeCombat : 1;
+  state.speedBeforeCombat = undefined;
 
   if (result.won) { if (onWin) onWin(result); }
   else { if (onLose) onLose(result); }
@@ -1040,6 +1065,8 @@ function launchDistrictCombat(id) {
     if (c) c.assignedTo = "attack:" + id;
   });
 
+  state.speedBeforeCombat = state.speed;
+  state.speed = 0;
   document.getElementById("cb-embedded-overlay").classList.add("active");
   cbInitEmbedded({
     mapType: "alley",
@@ -1156,7 +1183,7 @@ function renderDrugsTab() {
     html += `<div class="empty-state">Şu an yolda sevkiyat yok.</div>`;
   } else {
     activeShipments.forEach(v => {
-      const remaining = Math.max(0, v.arrivesAtMin - state.minutes);
+      const remaining = Math.max(0, v.arrivesAtMin - nowAbsoluteMin());
       const totalTime = v.totalTravelMin || 1;
       const pct = Math.min(100, 100 - (remaining / totalTime) * 100);
       const vehicleDef = VEHICLES.find(x => x.id === v.type);
@@ -1181,7 +1208,7 @@ function renderDrugsTab() {
       html += `<div class="card"><div class="card-title">${districtById(id).name} — Seviye ${lab.level}</div>`;
       const hasAssignedProducer = state.crew.some(c => c.role === "uretici" && c.assignedTo === "lab:" + id);
       if (activeBatch) {
-        const remaining = Math.max(0, activeBatch.finishesAtMin - state.minutes);
+        const remaining = Math.max(0, activeBatch.finishesAtMin - nowAbsoluteMin());
         const pct = Math.min(100, 100 - (remaining / activeBatch.totalMin) * 100);
         html += `
           <div class="card-desc">${DRUG_PRODUCTS.find(p => p.id === activeBatch.productId).name} üretiliyor...${activeBatch.auto ? " (otomatik)" : ""}</div>
@@ -1214,7 +1241,7 @@ function renderDrugsTab() {
   DRUG_PRODUCTS.forEach(p => {
     const pendingSale = state.activeStreetSales.find(s => s.productId === p.id);
     if (pendingSale) {
-      const remaining = Math.max(0, pendingSale.finishesAtMin - state.minutes);
+      const remaining = Math.max(0, pendingSale.finishesAtMin - nowAbsoluteMin());
       html += `
         <div class="card-row">
           <span class="card-stat">${p.name} × <span class="num">${pendingSale.amount}</span> — ilan verildi</span>
@@ -1306,7 +1333,7 @@ function dispatchShipment() {
     fromId, toId, material: material.id, amount: vehicleDef.capacity,
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
-    arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    arrivesAtMin: nowAbsoluteMin() + travelTime, totalTravelMin: travelTime,
     garageVehicleId: usedGarageId,
   });
   toast("Sevkiyat Yola Çıktı", `${vehicleDef.name} ${districtById(fromId).name}'den ${districtById(toId).name}'e hareket etti.`, "neutral");
@@ -1334,18 +1361,22 @@ function tryAutoStartProduction(districtId) {
 
   const product = DRUG_PRODUCTS.find(p => p.id === lab.autoProductionId);
   const lvl = LAB_LEVELS.find(l => l.level === lab.level);
-  const batchCount = 1; // otomatik mod her zaman tek parti üretir, döngüsel devam eder
 
-  for (const req of product.requires) {
-    if (state.materialStock[req.material] < req.amount * lvl.capacity * batchCount) return; // sessizce bekle
-  }
+  // Elindeki hammaddeyle üretilebilecek maksimum parti sayısını hesapla (güvenli üst sınır: 20)
+  const maxAffordable = Math.min(20, ...product.requires.map(req =>
+    Math.floor(state.materialStock[req.material] / (req.amount * lvl.capacity))
+  ));
+  if (maxAffordable <= 0) return; // hammadde yetersiz, sessizce bekle
+  const batchCount = maxAffordable;
+
   product.requires.forEach(req => { state.materialStock[req.material] -= req.amount * lvl.capacity * batchCount; });
 
-  const totalMin = lvl.batchTimeMin;
+  // Toplu üretim süresi: ilk parti tam süre, her ek parti yarı süre alır
+  const totalMin = Math.round(lvl.batchTimeMin * (1 + (batchCount - 1) * 0.5));
   const qualityFactor = 0.85 + (producer.loyalty / 100) * 0.3; // sadakate göre %85-115 verim
   lab.activeBatch = {
     productId: product.id, totalMin, batchCount,
-    finishesAtMin: state.minutes + totalMin,
+    finishesAtMin: nowAbsoluteMin() + totalMin,
     yieldAmount: Math.round(product.yieldPerBatch * lvl.capacity * batchCount * qualityFactor),
     auto: true,
   };
@@ -1399,7 +1430,7 @@ function sellDrug(productId) {
   state.drugStock[productId] = 0;
   state.activeStreetSales.push({
     productId, amount,
-    finishesAtMin: state.minutes + STREET_SALE_DURATION_MIN,
+    finishesAtMin: nowAbsoluteMin() + STREET_SALE_DURATION_MIN,
   });
   toast("İlan Çıkarıldı", `${amount} birim ${product.name} için satış ilanı verildi. ~3 saat sürecek.`, "neutral");
   render();
@@ -1428,7 +1459,7 @@ function renderHeistTab() {
   } else {
     state.activeHeists.forEach(h => {
       const target = HEIST_TARGETS.find(t => t.id === h.targetId);
-      const remaining = Math.max(0, h.finishesAtMin - state.minutes);
+      const remaining = Math.max(0, h.finishesAtMin - nowAbsoluteMin());
       const pct = Math.min(100, 100 - (remaining / h.totalPrepMin) * 100);
       html += `
         <div class="card">
@@ -1512,6 +1543,10 @@ function openHeistPlanner(targetId) {
       toast("Ekip Eksik", "Tüm rolleri doldurmalısın.", "negative");
       return;
     }
+    if (new Set(crewIds).size !== crewIds.length) {
+      toast("Aynı Kişi Birden Fazla Role Atanamaz", "Her ekip üyesi sadece bir role atanabilir.", "negative");
+      return;
+    }
     const equipmentIds = Array.from(modal.querySelectorAll("[data-eq]:checked")).map(c => c.dataset.eq);
     const equipmentCost = equipmentIds.reduce((sum, id) => sum + target.equipmentOptions.find(e => e.id === id).cost, 0);
     if (state.cash < equipmentCost) {
@@ -1528,7 +1563,7 @@ function openHeistPlanner(targetId) {
     // (gerçek "başarı şansı" artık yok, bu sadece düşman sayısını belirlemede yardımcı bir değer)
     state.activeHeists.push({
       targetId: target.id, crewIds, equipmentIds,
-      finishesAtMin: state.minutes + target.prepTimeMin,
+      finishesAtMin: nowAbsoluteMin() + target.prepTimeMin,
       totalPrepMin: target.prepTimeMin,
       successChance: target.baseSuccess,
     });
@@ -1598,6 +1633,7 @@ function resolveHeist(heist) {
     if (eq.effect === "police_wave_size") equipmentEffects.policeWaveSizeMod += eq.effectValue;
   });
 
+  state.speedBeforeCombat = state.speed;
   state.speed = 0; // hazırlanan operasyon vakti geldi, oyun zamanı duraklar
   document.getElementById("cb-embedded-overlay").classList.add("active");
   cbInitEmbedded({
@@ -1761,7 +1797,7 @@ function renderArmoryTab() {
   } else {
     state.blackMarketListings.forEach(listing => {
       const item = findArmoryItem(listing.itemType, listing.itemId);
-      const remaining = Math.max(0, listing.expiresAtMin - state.minutes);
+      const remaining = Math.max(0, listing.expiresAtMin - nowAbsoluteMin());
       html += `
         <div class="card">
           <div class="card-row">
@@ -1894,7 +1930,7 @@ function smuggleListing(listingId) {
     itemType: listing.itemType, itemId: listing.itemId, amount: listing.amount,
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
-    arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    arrivesAtMin: nowAbsoluteMin() + travelTime, totalTravelMin: travelTime,
     garageVehicleId: garageVehicle ? garageVehicle.id : null,
   });
 
@@ -1924,7 +1960,7 @@ function maybeSpawnBlackMarketListing() {
     itemType: pick.type, itemId: pick.item.id,
     price: Math.round(pick.item.priceSmuggle * discount),
     sourceLabel: BLACK_MARKET_SOURCES[Math.floor(Math.random() * BLACK_MARKET_SOURCES.length)],
-    expiresAtMin: state.minutes + 45 + Math.floor(Math.random() * 60),
+    expiresAtMin: nowAbsoluteMin() + 45 + Math.floor(Math.random() * 60),
     amount,
   });
 }
@@ -2193,18 +2229,33 @@ function renderCrewTab() {
   el.querySelectorAll("[data-assign-weapon]").forEach(sel => sel.addEventListener("change", () => {
     const c = state.crew.find(x => x.id === sel.dataset.assignWeapon);
     if (!c) return;
-    if (!sel.value) { c.assignedWeaponId = null; c.assignedWeaponInstanceId = null; return; }
+    if (!sel.value) { c.assignedWeaponId = null; c.assignedWeaponInstanceId = null; render(); return; }
     const [weaponId, instanceId] = sel.value.split(":");
+    // Güvenlik kontrolü: bu kopya başka birine atanmışsa reddet (render gecikmesine karşı)
+    const alreadyTaken = state.crew.some(other => other.id !== c.id && other.assignedWeaponInstanceId === instanceId);
+    if (alreadyTaken) {
+      toast("Silah Zaten Atanmış", "Bu silah kopyası başka bir ekip üyesine atanmış.", "negative");
+      render();
+      return;
+    }
     c.assignedWeaponId = weaponId;
     c.assignedWeaponInstanceId = instanceId;
+    render();
   }));
   el.querySelectorAll("[data-assign-armor]").forEach(sel => sel.addEventListener("change", () => {
     const c = state.crew.find(x => x.id === sel.dataset.assignArmor);
     if (!c) return;
-    if (!sel.value) { c.assignedArmorId = null; c.assignedArmorInstanceId = null; return; }
+    if (!sel.value) { c.assignedArmorId = null; c.assignedArmorInstanceId = null; render(); return; }
     const [armorId, instanceId] = sel.value.split(":");
+    const alreadyTaken = state.crew.some(other => other.id !== c.id && other.assignedArmorInstanceId === instanceId);
+    if (alreadyTaken) {
+      toast("Zırh Zaten Atanmış", "Bu zırh kopyası başka bir ekip üyesine atanmış.", "negative");
+      render();
+      return;
+    }
     c.assignedArmorId = armorId;
     c.assignedArmorInstanceId = instanceId;
+    render();
   }));
   el.querySelectorAll("[data-assign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.assign)));
   el.querySelectorAll("[data-reassign]").forEach(b => b.addEventListener("click", () => openNeighborhoodAssignModal(b.dataset.reassign)));
@@ -2364,7 +2415,7 @@ function finishMinigame() {
   const lab = state.districts[mg.districtId].lab;
   lab.activeBatch = {
     productId: mg.productId, totalMin, batchCount,
-    finishesAtMin: state.minutes + totalMin,
+    finishesAtMin: nowAbsoluteMin() + totalMin,
     yieldAmount: Math.max(1, Math.round(product.yieldPerBatch * mg.lvl.capacity * batchCount * qualityFactor)),
     auto: false,
   };
@@ -2503,7 +2554,7 @@ function runSpyIntelGeneration(minutesPassed) {
   const pick = candidates[Math.floor(Math.random() * candidates.length)];
   state.intelMarkers.push({
     id: uid(), districtId: pick.districtId, description: pick.label,
-    expiresAtMin: state.minutes + 60 + Math.floor(Math.random()*60),
+    expiresAtMin: nowAbsoluteMin() + 60 + Math.floor(Math.random()*60),
   });
 }
 
@@ -2663,7 +2714,7 @@ function spawnTestCaptive() {
   state.captives.push({
     id: uid(), name: randomName(), sourceGangId: gang.id,
     hp, maxHpAtCapture: hp, loyalty: 30 + Math.floor(Math.random() * 50),
-    lastHealAtMin: state.minutes, resolved: false,
+    lastHealAtMin: nowAbsoluteMin(), resolved: false,
     attributes: generateAttributesForRole(randomRole),
   });
   toast("Mahkum Ele Geçirildi", "Test amaçlı bir mahkum oluşturuldu.", "neutral");
@@ -2674,11 +2725,11 @@ function spawnTestCaptive() {
 function processCaptiveHealing(minutesPassed) {
   state.captives.forEach(c => {
     if (c.resolved) return;
-    const elapsed = state.minutes - c.lastHealAtMin;
+    const elapsed = nowAbsoluteMin() - c.lastHealAtMin;
     const healInterval = INTERROGATION_HEAL_MIN_MINUTES + Math.random() * (INTERROGATION_HEAL_MAX_MINUTES - INTERROGATION_HEAL_MIN_MINUTES);
     if (elapsed >= healInterval) {
       c.hp += 1;
-      c.lastHealAtMin = state.minutes;
+      c.lastHealAtMin = nowAbsoluteMin();
     }
   });
   processCaptiveRaidRisk(minutesPassed);
@@ -2950,6 +3001,10 @@ function openHideoutRaidPlanner(gangId) {
       toast("Ekip Eksik", "Tüm rolleri doldurmalısın.", "negative");
       return;
     }
+    if (new Set(crewIds).size !== crewIds.length) {
+      toast("Aynı Kişi Birden Fazla Role Atanamaz", "Her ekip üyesi sadece bir role atanabilir.", "negative");
+      return;
+    }
     const raidCrew = crewIds.map(cid => state.crew.find(c => c.id === cid)).filter(Boolean);
     const playerCrew = raidCrew.slice(0, 6).map(c => {
       const weapon = cbDetermineCrewWeapon(c);
@@ -2980,6 +3035,7 @@ function openHideoutRaidPlanner(gangId) {
     }));
 
     closeModal();
+    state.speedBeforeCombat = state.speed;
     state.speed = 0;
     document.getElementById("cb-embedded-overlay").classList.add("active");
     cbInitEmbedded({
@@ -3162,7 +3218,7 @@ function gameTick() {
       }
     }
 
-    if (v.status !== "transit" || state.minutes < v.arrivesAtMin) return;
+    if (v.status !== "transit" || nowAbsoluteMin() < v.arrivesAtMin) return;
     v.status = "arrived";
 
     if (v.faction === "player" && v.kind === "shipment") {
@@ -3204,7 +3260,7 @@ function gameTick() {
   runRivalGangAI(minutesPassed);
   runPoliceAI(minutesPassed);
   runSpyIntelGeneration(minutesPassed);
-  state.intelMarkers = state.intelMarkers.filter(m => state.minutes < m.expiresAtMin);
+  state.intelMarkers = state.intelMarkers.filter(m => nowAbsoluteMin() < m.expiresAtMin);
 
   // Yaralanma iyileşme kontrolü (Doktor mekaniği)
   processInjuryHealing();
@@ -3212,12 +3268,12 @@ function gameTick() {
 
   // Karaborsa ilanları: yeni ilan üretimi ve süresi dolanların temizlenmesi
   maybeSpawnBlackMarketListing();
-  state.blackMarketListings = state.blackMarketListings.filter(l => state.minutes < l.expiresAtMin);
+  state.blackMarketListings = state.blackMarketListings.filter(l => nowAbsoluteMin() < l.expiresAtMin);
 
   // Laboratuvar üretim kontrolü
   playerDistrictIds().forEach(id => {
     const lab = state.districts[id].lab;
-    if (lab && lab.activeBatch && state.minutes >= lab.activeBatch.finishesAtMin) {
+    if (lab && lab.activeBatch && nowAbsoluteMin() >= lab.activeBatch.finishesAtMin) {
       state.drugStock[lab.activeBatch.productId] += lab.activeBatch.yieldAmount;
       logEvent(`${districtById(id).name} laboratuvarı üretimi tamamladı.`);
       lab.activeBatch = null;
@@ -3229,14 +3285,14 @@ function gameTick() {
 
   // Soygun kontrolü - aynı anda birden fazlası bitmişse bile sadece ilkini işleriz,
   // combat açıldığı an state.speed=0 olacağı için gameTick zaten duracak.
-  const dueHeist = state.activeHeists.find(h => state.minutes >= h.finishesAtMin);
+  const dueHeist = state.activeHeists.find(h => nowAbsoluteMin() >= h.finishesAtMin);
   if (dueHeist) {
     state.activeHeists = state.activeHeists.filter(h => h !== dueHeist);
     resolveHeist(dueHeist);
   }
 
   // Sokak satışı ilanları: süresi dolanları çöz (combat gerektirmez, anlık işlenebilir)
-  const dueSales = state.activeStreetSales.filter(s => state.minutes >= s.finishesAtMin);
+  const dueSales = state.activeStreetSales.filter(s => nowAbsoluteMin() >= s.finishesAtMin);
   if (dueSales.length > 0) {
     state.activeStreetSales = state.activeStreetSales.filter(s => !dueSales.includes(s));
     dueSales.forEach(resolveStreetSale);
@@ -3244,7 +3300,7 @@ function gameTick() {
 
   // Karşı-operasyon kontrolü (rakip araçlarına pusu/soygun/kaçırma) - aynı anda
   // birden fazlası bitmişse sadece ilkini işleriz, combat açılınca zaman zaten duracak.
-  const dueOp = state.activeCounterOps.find(op => state.minutes >= op.finishesAtMin);
+  const dueOp = state.activeCounterOps.find(op => nowAbsoluteMin() >= op.finishesAtMin);
   if (dueOp) {
     state.activeCounterOps = state.activeCounterOps.filter(op => op !== dueOp);
     resolveCounterOp(dueOp);
@@ -3316,7 +3372,7 @@ function startRivalShipment(gang, territories) {
     fromId, toId, material: material.id, amount: 15 + Math.floor(Math.random()*15),
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
-    arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    arrivesAtMin: nowAbsoluteMin() + travelTime, totalTravelMin: travelTime,
   });
 }
 
@@ -3337,7 +3393,7 @@ function startRivalHeist(gang, territories) {
     fromId, toId, payout,
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
-    arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    arrivesAtMin: nowAbsoluteMin() + travelTime, totalTravelMin: travelTime,
   });
 }
 
@@ -3374,7 +3430,7 @@ function startPolicePatrol() {
     fromId, toId,
     routeNodes: route.nodeIndices,
     departedAtMin: state.minutes,
-    arrivesAtMin: state.minutes + travelTime, totalTravelMin: travelTime,
+    arrivesAtMin: nowAbsoluteMin() + travelTime, totalTravelMin: travelTime,
   });
 }
 
