@@ -3100,11 +3100,10 @@ function gameTick() {
   if (state.minutes >= 24 * 60) { state.minutes -= 24 * 60; state.day++; }
 
   // İşe alım havuzu her 3 günde bir otomatik yenilenir (henüz işe alınmamış adaylar değişir)
-  const nowAbsoluteMin = state.day * 24 * 60 + state.minutes;
   const poolAgeMinLimit = 3 * 24 * 60;
   if (!state.recruitPool || state.recruitPool.length === 0 ||
       state.recruitPoolGeneratedAtMin === undefined ||
-      nowAbsoluteMin - state.recruitPoolGeneratedAtMin >= poolAgeMinLimit) {
+      nowAbsoluteMin() - state.recruitPoolGeneratedAtMin >= poolAgeMinLimit) {
     generateRecruitPool();
   }
 
